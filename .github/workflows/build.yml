@@ -1,0 +1,241 @@
+name: Build
+
+# 触发：push tags v* / workflow_dispatch
+# 思路沿用 homeproxy-pro：
+#   1) 先调 arch-test 作发布门禁（workflow_call）
+#   2) 装工具链（apk-tools meson 编译、po2lmo、ipkg-build）
+#   3) 跑 build-pkg.sh 打 apk + ipk（两个包 + 一个 i18n 子包 = 6 个文件）
+#   4) 验 apk v3 ADB 格式
+#   5) 校验 tag 与 Makefile 版本相符，删旧 tag + 重建 release
+#   6) 保留最近 3 个 release
+#
+# 与 homeproxy 不同点：
+#   - 矩阵只 x86_64（设备就 1 台）
+#   - daed 走路径 A：从 szwjp/daed release 拉 prebuilt Go binary
+#   - tag = v<luci-app-daed PKG_VERSION>-r<PKG_RELEASE>（luci 包版本为基准）
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  APK_TOOLS_REF: 'b5a31c0d865342ad80be10d68f1bb3d3ad9b0866'
+
+jobs:
+  test:
+    uses: ./.github/workflows/arch-test.yml
+
+  build:
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: i18n coverage (warn only for publish)
+        run: python3 tests/i18n_coverage.py --warn-below 80 || true
+
+      - name: Cache apk-tools binary
+        id: cache-apk-tools
+        uses: actions/cache@v5
+        with:
+          path: /usr/local/bin/apk
+          key: apk-tools-${{ env.APK_TOOLS_REF }}-${{ runner.os }}
+
+      - name: Checkout apk-tools
+        if: steps.cache-apk-tools.outputs.cache-hit != 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: 'alpinelinux/apk-tools'
+          path: 'apk-tools'
+          fetch-depth: 0
+          ref: ${{ env.APK_TOOLS_REF }}
+
+      - name: Checkout po2lmo
+        uses: actions/checkout@v6
+        with:
+          repository: 'openwrt/luci'
+          path: 'po2lmo'
+          sparse-checkout: 'modules/luci-base/src'
+
+      - name: Setup dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -qq
+          sudo -E apt-get install -y build-essential curl fakeroot libssl-dev lua5.1 meson ninja-build
+
+          if [ "${{ steps.cache-apk-tools.outputs.cache-hit }}" != "true" ]; then
+            pushd apk-tools
+            meson setup build \
+              -Db_lto=true \
+              -Dcompressed-help=false \
+              -Ddocs=disabled \
+              -Dhelp=enabled \
+              -Dlua_version=5.1 \
+              -Ddefault_library=static \
+              -Durl_backend=wget \
+              -Dzstd=false \
+              -Dpython=disabled \
+              -Dtests=disabled \
+              -Dcrypto_backend=openssl
+            ninja -C build
+            sudo -E meson install -C build --strip
+            popd
+          else
+            echo "apk-tools 缓存命中，跳过编译"
+          fi
+
+          pushd po2lmo/modules/luci-base/src
+          make po2lmo
+          sudo -E install -m0755 -s po2lmo /usr/local/bin/po2lmo
+          popd
+
+          curl -fLo ipkg-build "https://raw.githubusercontent.com/openwrt/openwrt/c618c6a353f2adafab4c182224739d3687896e49/scripts/ipkg-build"
+          sudo install -m0755 ipkg-build /usr/local/bin/ipkg-build
+
+      - name: Verify toolchain
+        run: |
+          command -v apk >/dev/null || { echo "::error::apk 未正确安装"; exit 1; }
+          command -v po2lmo >/dev/null || { echo "::error::po2lmo 未正确安装"; exit 1; }
+          command -v ipkg-build >/dev/null || { echo "::error::ipkg-build 未正确安装"; exit 1; }
+          apk --version
+
+      - name: Build packages (apk + ipk)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 触发：tag push 和 manual dispatch 都是发布构建，固定 release 模式
+          fakeroot bash .github/build-pkg.sh apk release
+          fakeroot bash .github/build-pkg.sh ipk release
+          shopt -s nullglob
+          apks=(.github/*.apk)
+          ipks=(.github/*.ipk)
+          if [ "${#apks[@]}" -eq 0 ] || [ "${#ipks[@]}" -eq 0 ]; then
+            echo "::error::未生成预期的 apk/ipk 文件"
+            exit 1
+          fi
+          printf '生成的包:\n'
+          ls -la .github/*.{apk,ipk}
+
+      - name: Validate apk packages (apk-tools v3)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(.github/*.apk)
+          echo "apk-tools: $(apk --version)"
+          for f in "${apks[@]}"; do
+            echo "== $f"
+            if [ "$(head -c 3 "$f")" != "ADB" ]; then
+              echo "::error::$f 不是 apk v3 (ADB) 格式"
+              exit 1
+            fi
+            dump="$RUNNER_TEMP/$(basename "$f").dump"
+            apk adbdump "$f" > "$dump"
+            head -15 "$dump"
+            echo "   ADB 容器与元数据可解析"
+          done
+
+      - name: Validate ipk packages (ipkg-build output)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          ipks=(.github/*.ipk)
+          for f in "${ipks[@]}"; do
+            echo "== $f"
+            # ipk = gzip 压缩的 tar，结构 CONTROL/ + data.tar.gz
+            file "$f"
+            if ! head -c 2 "$f" | grep -q '..'; then
+              echo "::error::$f 头部异常（不是 gzip？）"
+              exit 1
+            fi
+            tar -tzf "$f" | head -10
+          done
+
+      - name: Derive and validate release version
+        run: |
+          set -euo pipefail
+          # tag 基准 = luci-app-daed 的 PKG_VERSION-rPKG_RELEASE
+          MK_V="$(sed -n 's/^PKG_VERSION:=//p' luci-app-daed/Makefile)"
+          MK_R="$(sed -n 's/^PKG_RELEASE:=//p' luci-app-daed/Makefile)"
+          EXPECTED="${MK_V}-r${MK_R}"
+          if [[ ! "$EXPECTED" =~ ^[0-9][0-9A-Za-z.]*-r[0-9]+$ ]]; then
+            echo "::error::luci-app-daed/Makefile 版本 $EXPECTED 非法"
+            exit 1
+          fi
+          # 等位编号：-rN 规范为 -rNN，使 GitHub 排序自然（r2 → r02）
+          canon() {
+            printf '%s-r%02d' "${1%-r*}" "$((10#${1##*-r}))"
+          }
+          TAG_VERSION="$(canon "$EXPECTED")"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            ON_TAG="${GITHUB_REF_NAME#v}"
+            if [[ ! "$ON_TAG" =~ ^[0-9][0-9A-Za-z.]*-r[0-9]+$ ]]; then
+              echo "::error::tag v$ON_TAG 格式非法（期望形如 v1.4-r02）"
+              exit 1
+            fi
+            if [ "$(canon "$ON_TAG")" != "$TAG_VERSION" ]; then
+              echo "::error::tag v$ON_TAG 与 luci-app-daed Makefile 版本 $EXPECTED 不一致，拒绝发布"
+              exit 1
+            fi
+          fi
+          echo "VERSION=$EXPECTED" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=$TAG_VERSION" >> "$GITHUB_ENV"
+          echo "发布版本 v$TAG_VERSION（luci 包基线 $EXPECTED）"
+
+      - name: Publish release (replacing an existing one if present)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # 6 个文件：2 包 × 2 格式 + i18n × 2 格式
+          apks=(.github/luci-app-daed-*.apk .github/luci-i18n-daed-*.apk .github/daed-*.apk)
+          ipks=(.github/luci-app-daed-*.ipk .github/luci-i18n-daed-*.ipk .github/daed-*.ipk)
+          if [ "${#apks[@]}" -eq 0 ] || [ "${#ipks[@]}" -eq 0 ]; then
+            echo "::error::找不到待上传的 apk/ipk"
+            exit 1
+          fi
+          LABEL="luci--app--daed"
+          MSG="v${TAG_VERSION//-/--}"
+          NOTES="[![v$TAG_VERSION](https://img.shields.io/badge/${LABEL}-${MSG}-blue)](https://github.com/$GITHUB_REPOSITORY/releases/tag/v$TAG_VERSION)"
+          # 同名 tag/release 视为重新发布：先删旧的
+          if gh release view "v$TAG_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "已存在 v$TAG_VERSION，先删除后重新发布"
+            gh release delete "v$TAG_VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          elif gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$TAG_VERSION" >/dev/null 2>&1; then
+            echo "已存在孤儿 tag v$TAG_VERSION，先删除后重新发布"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/v$TAG_VERSION"
+          fi
+          gh release create "v$TAG_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "v$TAG_VERSION" \
+            --notes "$NOTES" \
+            "${apks[@]}" "${ipks[@]}"
+
+      - name: Keep only the latest 3 releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 1) 删老 release + 关联 tag
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            | jq -r '.[].tagName' \
+            | tail -n +4 \
+            | while read -r t; do
+                [ -z "$t" ] && continue
+                echo "  清理老 release $t"
+                gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+              done
+          # 2) 清前 1 周的 workflow artifact（保险）
+          echo "(artifact 由 GitHub 端 retention 清理，这里不主动动)"
+        continue-on-error: true

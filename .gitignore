@@ -6,6 +6,11 @@
 *.so
 *.ko
 
+# Packaged output (build-pkg.sh)
+apk-tools/
+po2lmo/
+ipkg-build
+
 # Editor
 .DS_Store
 *.swp
@@ -24,3 +29,4 @@ staging_dir/
 dl/
 tmp/
 *.log
+__pycache__/

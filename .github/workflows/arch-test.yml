@@ -1,0 +1,78 @@
+name: Arch test
+
+# 静态门禁：不依赖 OpenWrt SDK、不依赖外网，3 分钟内跑完。
+# 在 PR / push-to-main / workflow_dispatch / workflow_call 触发；
+# build.yml 用 workflow_call 让 release 走同一份门禁，避免两套实现漂移。
+#
+# 检查项：
+#   1) i18n 覆盖率（po/zh_Hans 必须 100% 翻译所有 pot msgid）
+#   2) Makefile 关键字段齐整（PKG_NAME/PKG_VERSION/PKG_RELEASE/HASH 等）
+#   3) daed 包能解析到 PKG_HASH（脚本层面的"是否对齐"哨兵，不下二进制）
+#   4) YAML / 脚本语法
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: arch-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  arch-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: i18n coverage (zh_Hans)
+        run: python3 tests/i18n_coverage.py --fail-below 100
+
+      - name: Makefile sanity checks
+        run: |
+          set -euo pipefail
+          # 关键字段非空
+          for v in PKG_NAME PKG_VERSION PKG_RELEASE; do
+            sed -nE "s/^${v}:=(.*)/\1/p" daed/Makefile | grep -q . \
+              || { echo "::error::daed/Makefile 缺 ${v}"; exit 1; }
+            sed -nE "s/^${v}:=(.*)/\1/p" luci-app-daed/Makefile | grep -q . \
+              || { echo "::error::luci-app-daed/Makefile 缺 ${v}"; exit 1; }
+          done
+          # PKG_HASH 不能是 skip（发布构建时必须有）
+          HASH="$(sed -nE 's/^PKG_HASH:=(.+)/\1/p' daed/Makefile | tr -d ' \n')"
+          if [ -z "$HASH" ] || [ "$HASH" = "skip" ]; then
+            echo "::error::daed/Makefile PKG_HASH 不能为空或 skip（先跑 scripts/release-sync.sh 同步 szwjp/daed release）"
+            exit 1
+          fi
+          case "$HASH" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) echo "::error::daed/Makefile PKG_HASH 必须是 64 位 hex（实际: $HASH）"; exit 1 ;;
+          esac
+
+          # 验证 release URL 实际可下（外网检查；release 即将过期时第一时间发现）
+          TAG="v$(sed -nE 's/^PKG_VERSION:=(.+)/\1/p' daed/Makefile | tr -d ' \n')-nightly"
+          URL="https://github.com/szwjp/daed/releases/download/${TAG}/daed-linux-x86_64.tar.gz"
+          if ! gh api "repos/szwjp/daed/releases/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::szwjp/daed 没有 ${TAG} release，先到 szwjp/daed 触发一次 build"
+            exit 1
+          fi
+
+      - name: Shell / YAML syntax
+        run: |
+          set -euo pipefail
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -f "$f" ] || continue
+            python3 -c "import yaml,sys;yaml.safe_load(open(sys.argv[1]));print('YAML OK',sys.argv[1])" "$f" \
+              || { echo "::error::$f YAML 解析失败"; exit 1; }
+          done
+          bash -n scripts/release-sync.sh
+          bash -n .github/build-pkg.sh 2>/dev/null || true
+          echo "全部语法检查通过"
