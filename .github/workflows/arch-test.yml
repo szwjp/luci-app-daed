@@ -46,16 +46,16 @@ jobs:
             sed -nE "s/^${v}:=(.*)/\1/p" luci-app-daed/Makefile | grep -q . \
               || { echo "::error::luci-app-daed/Makefile 缺 ${v}"; exit 1; }
           done
-          # PKG_HASH 不能是 skip（发布构建时必须有）
+          # PKG_HASH 不能是 skip（发布构建时必须有）。长度 64 hex = 256-bit SHA-256。
           HASH="$(sed -nE 's/^PKG_HASH:=(.+)/\1/p' daed/Makefile | tr -d ' \n')"
           if [ -z "$HASH" ] || [ "$HASH" = "skip" ]; then
             echo "::error::daed/Makefile PKG_HASH 不能为空或 skip（先跑 scripts/release-sync.sh 同步 szwjp/daed release）"
             exit 1
           fi
-          case "$HASH" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-            *) echo "::error::daed/Makefile PKG_HASH 必须是 64 位 hex（实际: $HASH）"; exit 1 ;;
-          esac
+          if [[ ! "$HASH" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::daed/Makefile PKG_HASH 必须是 64 位 hex（实际长度 ${#HASH}: $HASH）"
+            exit 1
+          fi
 
           # 验证 release URL 实际可下（外网检查；release 即将过期时第一时间发现）
           TAG="v$(sed -nE 's/^PKG_VERSION:=(.+)/\1/p' daed/Makefile | tr -d ' \n')-nightly"
