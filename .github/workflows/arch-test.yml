@@ -73,16 +73,27 @@ jobs:
             echo "::error::daed/Makefile DAED_RELEASE_TAG='$TAG' 不是 v*-nightly-YYYYMMDD"
             exit 1
           fi
+          # PKG_SOURCE_URL 通常写成 .../download/$(DAED_RELEASE_TAG)，这里把
+          # make 变量引用展开后再比对（shell 不做 make 的变量展开）
           SRC_URL="$(get_mk PKG_SOURCE_URL daed/Makefile)"
-          case "$SRC_URL" in
-            *"/download/$TAG") ;;
-            *) echo "::error::PKG_SOURCE_URL 与 DAED_RELEASE_TAG 不一致：url=$SRC_URL tag=$TAG"; exit 1 ;;
+          SRC_URL_EXPANDED="${SRC_URL//'$(DAED_RELEASE_TAG)'/$TAG}"
+          case "$SRC_URL_EXPANDED" in
+            *"/download/$TAG"*) ;;
+            *) echo "::error::PKG_SOURCE_URL 与 DAED_RELEASE_TAG 不一致：展开后=$SRC_URL_EXPANDED tag=$TAG"; exit 1 ;;
           esac
           if ! gh api "repos/szwjp/daed/releases/tags/${TAG}" >/dev/null 2>&1; then
             echo "::error::szwjp/daed 没有 release ${TAG}，先到 szwjp/daed 触发一次 build 或跑 release-sync"
             exit 1
           fi
-          echo "版本检查通过：daed $DV ($TAG), hash ${HASH:0:8}…"
+          # 资产必须真的能下载（HEAD 请求，不下载 33MB 正文）
+          SRC_FILE="$(get_mk PKG_SOURCE daed/Makefile)"
+          ASSET="${SRC_URL_EXPANDED%/}/${SRC_FILE}"
+          CODE="$(curl -sSIL -o /dev/null -w '%{http_code}' "$ASSET")"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::release 资产不可下载（HTTP $CODE）：$ASSET"
+            exit 1
+          fi
+          echo "版本检查通过：daed $DV ($TAG), hash ${HASH:0:8}…, 资产 HTTP $CODE"
 
           # 交叉校验：arch-test 的 PKG_VERSION（YYYY.MM.DD）应与 tag 里的日期一致
           TAG_DATE="${TAG##*-nightly-}"
