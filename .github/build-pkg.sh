@@ -58,6 +58,15 @@ get_mk_multiline_value() {
 		| xargs || true
 }
 
+# 算 sha256（macOS 用 shasum，Linux 用 sha256sum）
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{print $1}'
+	else
+		shasum -a 256 "$1" | awk '{print $1}'
+	fi
+}
+
 # 过滤掉 ipk/apk 里无法表达的 OpenWrt 构建期依赖语法。
 #
 # OpenWrt Makefile 的 DEPENDS 里有三种东西，只有第一种能进包的 Depends 字段：
@@ -201,6 +210,13 @@ build_one() {
 		fi
 	fi
 
+	# apk v3 不认 `all`：它只接受 noarch（架构无关）或具体架构名。
+	# 实测 ImmortalWrt 25.12 设备上 luci-base 是 A:noarch、luci-compat 是 A:x86_64，
+	# 而带 arch:all 的包直接被判 "uninstallable"（arch: all / error: uninstallable）。
+	# ipk/opkg 那边反过来用 `all`，所以只在 apk 分支做映射。
+	local pkg_arch_apk="$pkg_arch"
+	[ "$pkg_arch_apk" = "all" ] && pkg_arch_apk="noarch"
+
 	local mk_pkg_version mk_pkg_release pkg_version
 	mk_pkg_version="$(get_mk_value "$mk" PKG_VERSION)"
 	mk_pkg_release="$(get_mk_value "$mk" PKG_RELEASE)"
@@ -224,7 +240,11 @@ build_one() {
 		echo "warning: $mk 缺 Package/$pkg_name/conffiles，包会缺 conffile 保护" >&2
 	fi
 
-	echo "=== Building $pkg_name $pkg_version ($PKG_MGR, arch=$pkg_arch) ==="
+	if [ "$PKG_MGR" = "apk" ]; then
+		echo "=== Building $pkg_name $pkg_version (apk, arch=$pkg_arch_apk) ==="
+	else
+		echo "=== Building $pkg_name $pkg_version (ipk, arch=$pkg_arch) ==="
+	fi
 
 	local temp_dir temp_pkg_dir
 	temp_dir="$(mktemp -d "$BASE_DIR/tmp.XXXXXX")"
@@ -283,11 +303,7 @@ build_one() {
 			|| { echo "error: 下载 release tarball 失败：$tarball_url" >&2; return 1; }
 		# 校验 hash
 		local actual
-		if command -v sha256sum >/dev/null 2>&1; then
-			actual="$(sha256sum "$tarball" | awk '{print $1}')"
-		else
-			actual="$(shasum -a 256 "$tarball" | awk '{print $1}')"
-		fi
+		actual="$(sha256_of "$tarball")"
 		if [ "$actual" != "$pkg_hash" ]; then
 			echo "error: release tarball hash 不符（期望 $pkg_hash，实测 $actual）" >&2
 			return 1
@@ -326,7 +342,10 @@ build_one() {
 
 	# —— 打 apk / ipk ——
 	if [ "$PKG_MGR" == "apk" ]; then
-		find "$temp_pkg_dir" -type f,l -printf '/%P\n' | sort > "$temp_dir/$pkg_name.list"
+		# 可移植的 apk 文件清单：GNU find 的 -printf 在 macOS/BSD 上没有，
+		# 用 find + sed 生成同样的 "/路径" 列表（CI 是 Linux，两边都能跑）
+		( cd "$temp_pkg_dir" && find . \( -type f -o -type l \) | sed 's|^\./|/|' | sort ) \
+			> "$temp_dir/$pkg_name.list"
 		mv "$temp_dir/$pkg_name.list" "$temp_pkg_dir/lib/apk/packages/$pkg_name.list"
 
 		if [ "${#conffiles[@]}" -gt 0 ]; then
@@ -338,7 +357,7 @@ build_one() {
 		if [ -f "$temp_pkg_dir/lib/apk/packages/$pkg_name.conffiles" ]; then
 			while IFS= read -r file; do
 				[ -f "$temp_pkg_dir/$file" ] || continue
-				csum="$(sha256sum "$temp_pkg_dir/$file" | awk '{print $1}')"
+				csum="$(sha256_of "$temp_pkg_dir/$file")"
 				echo "$file $csum" >> "$temp_pkg_dir/lib/apk/packages/$pkg_name.conffiles_static"
 			done < "$temp_pkg_dir/lib/apk/packages/$pkg_name.conffiles"
 		fi
@@ -391,7 +410,7 @@ build_one() {
 			--info "name:$pkg_name" \
 			--info "version:$pkg_version" \
 			--info "description:$description" \
-			--info "arch:$pkg_arch" \
+			--info "arch:$pkg_arch_apk" \
 			--info "origin:$pkg_name" \
 			--info "maintainer:szwjp <szwjp@users.noreply.github.com>" \
 			${depends:+--info "depends:libc $depends"} \
@@ -522,7 +541,8 @@ build_i18n() {
 
 	if [ "$PKG_MGR" == "apk" ]; then
 		mkdir -p "$i18n_dir/lib/apk/packages/"
-		find "$i18n_dir" -type f,l -printf '/%P\n' | sort > "$temp_dir/$i18n_name.list"
+		( cd "$i18n_dir" && find . \( -type f -o -type l \) | sed 's|^\./|/|' | sort ) \
+			> "$temp_dir/$i18n_name.list"
 		mv "$temp_dir/$i18n_name.list" "$i18n_dir/lib/apk/packages/$i18n_name.list"
 		apk mkpkg \
 			--info "name:$i18n_name" \
