@@ -29,7 +29,7 @@ PKG_RELEASE:=1
 # 源文件来自 szwjp/daed GitHub Release；asset 名固定，hash 在 release 页面拿。
 PKG_SOURCE:=daed-linux-x86_64.tar.gz
 PKG_SOURCE_URL:=https://github.com/szwjp/daed/releases/download/v$(PKG_VERSION)-nightly
-PKG_HASH:=skip
+PKG_HASH:=d107e6b6d5eed6ea5576be5cfb6e6280a444c7876b5c6bb5f2fe48222e2af2b5
 
 PKG_LICENSE:=AGPL-3.0-only MIT
 PKG_LICENSE_FILES:=LICENSE

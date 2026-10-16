@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-daed
 PKG_VERSION:=1.4
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 LUCI_TITLE:=LuCI for daed (szwjp/daed build)
 LUCI_DEPENDS:=+daed +zoneinfo-asia +luci-compat
