@@ -1,0 +1,26 @@
+# Build artifacts
+*.ipk
+*.tar.gz
+*.tar
+*.o
+*.so
+*.ko
+
+# Editor
+.DS_Store
+*.swp
+*.bak
+*~
+.idea/
+.vscode/
+
+# LuaCaches
+/luci-app-daed/luasrc/*/.luacachestat
+
+# OpenWrt SDK
+bin/
+build_dir/
+staging_dir/
+dl/
+tmp/
+*.log

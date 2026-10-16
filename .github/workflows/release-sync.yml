@@ -1,0 +1,70 @@
+name: Release Sync
+
+# 每日 UTC 01:00（北京时间 09:00）轮询 szwjp/daed 最新 v2.1.1-nightly-* release，
+# 有新 release 就 bump PKG_VERSION + PKG_HASH 并 commit。
+# commit message 含 [skip release-sync] 时跳过。
+# 也可手动 workflow_dispatch。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Latest tag on szwjp/daed
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 失败不致命：可能 szwjp/daed 当天还没跑过 build
+          TAG="$(gh api repos/szwjp/daed/releases --jq \
+            '[.[] | select(.tag_name | startswith("v2.1.1-nightly-"))][0].tag_name' 2>/dev/null || true)"
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "::notice::szwjp/daed 当天还没有 v2.1.1-nightly release，跳过"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 若本仓库 PKG_VERSION 已和 tag 一致，无需再 bump
+          CURRENT="$(sed -nE 's/^[[:space:]]*PKG_VERSION:=([^[:space:]]+).*/\1/p' daed/Makefile | head -1)"
+          TAG_VERSION="${TAG#v}"; TAG_VERSION="${TAG_VERSION%%-nightly-*}"
+          echo "current PKG_VERSION=$CURRENT / tag=$TAG => PKG_VERSION should be $TAG_VERSION"
+          if [ "$CURRENT" = "$TAG_VERSION" ]; then
+            echo "::notice::已是最新（$CURRENT），跳过"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "tag_version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Run sync script
+        if: steps.probe.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release-sync.sh
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::error title=release-sync 失败::检查 run 步骤"
+          # 简易记录：不开 issue（保持低噪音），仅 PR 评论 / 注释
+          echo "release-sync 失败，请看 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
