@@ -18,7 +18,15 @@ on:
   workflow_call:
 
 concurrency:
-  group: arch-test-${{ github.ref }}
+  # group 里必须带 github.workflow：本 workflow 既被 push 直接触发，也被
+  # build.yml 通过 workflow_call 调用。若不区分调用方，两者落在同一个 group，
+  # 后启动的运行会把先前那个 cancel 掉，被取消的 run 在 commit 上显示一个红叉
+  # （2026-10-16 实测踩到：push 触发 arch-test 后紧接着 dispatch build，
+  #  push 那次 arch-test 就被取消）。
+  # 在 reusable workflow 里 github.workflow 是「调用者」的名字，
+  # 所以 push 触发时是 "Arch test"、被 build 调用时是 "Build"，自然分成两组，
+  # 同一组内（连续 push）仍然保留 cancel-in-progress 的省资源效果。
+  group: arch-test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
