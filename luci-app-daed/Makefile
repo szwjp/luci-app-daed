@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-daed
-PKG_VERSION:=1.4
-PKG_RELEASE:=2
+PKG_VERSION:=2.1.1
+PKG_RELEASE:=1
 
 LUCI_TITLE:=LuCI for daed (szwjp/daed build)
 # +daed：daed 二进制包（由本仓同仓 daed/ 子包提供，或已装的上游 daed 兼容）
