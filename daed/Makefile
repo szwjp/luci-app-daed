@@ -68,8 +68,15 @@ endef
 define Package/daed
   $(call Package/daed/Default)
   TITLE:=A Modern Dashboard For dae (szwjp/daed build)
+  # 依赖对齐 ImmortalWrt 官方 daed 包（设备上 `apk info -a daed` 实测）：
+  #   ca-bundle / kmod-sched-core / kmod-sched-bpf / kmod-veth / libc
+  #   + kmod-xdp-sockets-diag —— 官方包有这项，本包最初漏了；实测在设备上装
+  #     本包会把已装的 kmod-xdp-sockets-diag 当孤儿包 Purging 掉。
+  # @KERNEL_XDP_SOCKETS 与 DAED_USE_VMLINUX_BTF:vmlinux-btf 是构建期语法，
+  # 只在 OpenWrt 源码构建时有意义；打 ipk/apk 时由 build-pkg.sh 过滤掉。
   DEPENDS:=+ca-bundle +kmod-sched-core +kmod-sched-bpf \
-           +kmod-veth +v2ray-geoip +v2ray-geosite \
+           +kmod-veth +kmod-xdp-sockets-diag \
+           +v2ray-geoip +v2ray-geosite \
            +@KERNEL_XDP_SOCKETS \
            +DAED_USE_VMLINUX_BTF:vmlinux-btf
 endef
