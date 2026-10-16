@@ -11,62 +11,91 @@
 | LuCI 源码 | 复用 [QiuSimons/luci-app-daed](https://github.com/QiuSimons/luci-app-daed) `kix` 分支 |
 | 与 QiuSimons 差异 | 二进制从 release 拉而非 SDK 编译；不依赖 vmlinux-btf/5 个 patchset |
 
-## 快速装机（手动）
+## 快速装机
+
+### 方式 1：直接用 Release 里的包（推荐，无需编译）
+
+每次构建都会发布 6 个资产（两种包格式 × 两个包 + 中文语言包）：
+
+| 资产 | 用途 |
+|---|---|
+| `daed-<日期>-r<N>.apk` / `.ipk` | daed 二进制（含 procd init、UCI 模板） |
+| `luci-app-daed-<版本>-r<N>.apk` / `.ipk` | LuCI 面板（Lua CBI：设置/仪表板/日志） |
+| `luci-i18n-daed-zh-cn-<版本>-r<N>.apk` / `.ipk` | 中文翻译 |
+
+**先确认设备用的是哪个包管理器**（OpenWrt 25.12+ 已换成 apk）：
 
 ```bash
-# 在你的 OpenWrt 源目录（feeds 体系下）
-git clone https://github.com/szwjp/luci-app-daed package/dae
-./scripts/feeds update -i daed
-./scripts/feeds install -a
-
-make menuconfig
-# Network → Web Servers/Proxies → <*> luci-app-daed
-#                                      <*> daed
-# （BTF 走子选项：kernel BTF 优先，要求 KERNEL_DEBUG_INFO_BTF）
-
-make package/dae/luci-app-daed/compile V=s
-make package/dae/daed/compile V=s
-
-# 把 bin/packages/.../daed_*.ipk 和 luci-app-daed_*.ipk 拷到设备
-scp bin/packages/*/*/{daed,luci-app-daed}_*.ipk root@192.168.1.1:/tmp/
-
 # 设备上
+which apk opkg          # 25.12+ 只有 apk；24.10 及更早是 opkg
+cat /etc/os-release | head -3
+```
+
+apk 设备（如本项目的 ImmortalWrt 25.12.2 / apk-tools 3.0.5）：
+
+```bash
+TAG=v2.1.1-r02   # 换成最新 tag
+for f in daed-2026.10.16-r1.apk luci-app-daed-2.1.1-r2.apk luci-i18n-daed-zh-cn-2.1.1-r2.apk; do
+  curl -fsSLO "https://github.com/szwjp/luci-app-daed/releases/download/$TAG/$f"
+done
+scp *.apk root@192.168.1.1:/tmp/
+
 ssh root@192.168.1.1
-# 第一次安装：opkg 看到 /etc/config/daed 已存在（你之前手动装的）会提示三路合并，选 N
-# 保留你改过的 UCI（enabled=1 / listen_addr=2023 等）
-opkg install /tmp/daed_*.ipk /tmp/luci-app-daed_*.ipk
-# 如果是全新设备才需要：
-# uci set daed.config.enabled='1' && uci commit daed
+# 本仓的包没有签名，本地文件安装需要 --allow-untrusted
+apk add --allow-untrusted /tmp/daed-*.apk /tmp/luci-app-daed-*.apk /tmp/luci-i18n-daed-*.apk
+
+uci set daed.config.enabled='1'; uci commit daed
 /etc/init.d/daed enable
 /etc/init.d/daed restart
-
-# 浏览器看
-# http://192.168.1.1/cgi-bin/luci/admin/services/daed
-# Header 应该显示 "内核 vX.X.X"（来自 szwjp/daed 的 coreVersion 定制）
+# 浏览器：http://192.168.1.1/cgi-bin/luci/admin/services/daed
+# Header 应显示「内核 vX.X.X」（szwjp/daed 的 coreVersion 定制）
 ```
+
+opkg 设备（24.10 及更早）：
+
+```bash
+scp *.ipk root@192.168.1.1:/tmp/
+ssh root@192.168.1.1 'opkg install /tmp/daed_*.ipk /tmp/luci-app-daed_*.ipk'
+```
+
+> 升级时 `/etc/config/daed` 与 `/etc/init.d/daed` 是 conffile（改过会提示保留）；
+> `wing.db` / `geo-update.env` / `geo*.dat` / `/var/log/daed/daed.log` 不在包内，
+> 包管理器不会碰，业务数据天然保留。
+
+### 方式 2：编进自己的固件（OpenWrt SDK）
+
+```bash
+git clone https://github.com/szwjp/luci-app-daed package/dae
+./scripts/feeds update -i daed && ./scripts/feeds install -a
+make menuconfig   # Network → Web Servers/Proxies → luci-app-daed / daed
+make package/dae/luci-app-daed/compile V=s
+make package/dae/daed/compile V=s
+```
+
+本仓带 GitHub Actions，也可以直接推 `v*` tag 触发构建发版（见 `.github/workflows/build.yml`）。
 
 ## 升级
 
-`szwjp/daed` 每天推完 → 它的 build-custom.yml 跑通 → 发新 `v2.1.1-nightly-YYYYMMDD` release →
-`szwjp/luci-app-daed` 的 release-sync.yml 在第二天早上 09:00 探测到新 release → 自动 bump `PKG_VERSION` + `PKG_HASH` + commit。
+链路是自动的：
 
-你只要拉本仓库最新 main，重打 ipk，设备上 opkg upgrade 即可：
+```
+szwjp/daed push
+  → 它的 build-custom.yml 构建 + 发 release(v2.1.1-nightly-YYYYMMDD)
+  → 本仓 release-sync.yml（每天 09:00）跑 scripts/release-sync.sh
+       · 更新 daed/Makefile: PKG_VERSION / DAED_RELEASE_TAG / PKG_HASH / DAECORE_PIN
+       · luci-app-daed 的 PKG_RELEASE +1 → 本仓新 tag（v2.1.1-rNN）
+  → 本仓 build.yml 打包 apk+ipk 并发 release
+  → 设备 apk add / opkg install 新包
+```
+
+设备侧升级只要两步：
 
 ```bash
-# 在 OpenWrt 源目录
-git pull origin main   # 或: git pull https://github.com/szwjp/luci-app-daed.git main
-make package/dae/luci-app-daed/compile V=s
-make package/dae/daed/compile V=s
-scp bin/packages/*/*/{daed,luci-app-daed}_*.ipk root@192.168.1.1:/tmp/
-
-# 设备上：升级时 /etc/config/daed 与 /etc/init.d/daed 是 conffiles，
-# 你没改过的话自动被新版覆盖；改过则提示三路合并，**选 N 保留**。
-# wing.db / geo-update.env / geo*.dat / var/log/daed/daed.log
-# 全部不在 conffile 也不在 install 段，opkg 不会动——业务数据天然保留。
-ssh root@192.168.1.1
-opkg install /tmp/daed_*.ipk /tmp/luci-app-daed_*.ipk
+# apk 设备
+apk add --allow-untrusted /tmp/新下载的包.apk
 /etc/init.d/daed restart
 ```
+
 
 ## 仓库结构
 
@@ -98,32 +127,56 @@ luci-app-daed/
 - patchset 移植——你这台 ImmortalWrt 已用 kernel BTF
 - aarch64 btf / 内核 5.10 适配——上游 dae 已支持，但本仓暂未做回归
 
-## 验证清单（已通过 / 待验证）
+## 验证清单
 
-- [x] 仓库结构完整、`find` 验证 18 个文件（含 Makefile ×2）
-- [x] LuCI lua 源（controller/cbi/view/po）可正常 parse（与 QiuSimons 一致）
-- [x] `daed/Makefile` 路径 A 形态：只有 `Build/Prepare` 解包 + `Build/Compile` no-op
-- [x] szwjp/daed build-custom.yml `release` job 跑通：run [38916721071](https://github.com/szwjp/daed/actions/runs/38916721071) 成功，release [v2.1.1-nightly-20261016](https://github.com/szwjp/daed/releases/tag/v2.1.1-nightly-20261016) 已发布
-- [x] `release-sync.yml` 跑通：run [38917361528](https://github.com/szwjp/luci-app-daed/actions/runs/38917361528) 输出「已是最新（2.1.1），跳过」
-- [x] opkg 升级链路模拟：wing.db / geo-update.env / 日志全部保留；/usr/bin/daed 升级到 59.6MB 新版
-- [x] `daed/files/daed.init` 与 ImmortalWrt 上游对齐（含 `--logfile` 等 procd 参数），不是 QiuSimons 的简化版
-- [ ] 在 192.168.1.1 设备上实际 `opkg install` 一次（待你授权）
-- [ ] 实际抓 Header 的 `coreVersion` 显示
+- [x] 仓库结构完整（2 个 OpenWrt 包 + LuCI lua/po/root + 3 个 workflow + 构建脚本）
+- [x] LuCI lua 源（controller/cbi/view/po）与 QiuSimons `kix` 分支一致
+- [x] `daed/Makefile` 路径 A 形态：`Build/Prepare` 解包 + `Build/Compile` no-op
+- [x] szwjp/daed 的 `release` job 跑通并产出 `v2.1.1-nightly-20261016`
+- [x] 本仓 `arch-test` 门禁全绿（i18n 覆盖 / Makefile 字段 / 版本一致性 / 语法）
+- [x] 本仓 `build.yml` 端到端跑通：一次产出 6 个资产
+      （daed apk+ipk、luci-app-daed apk+ipk、i18n apk+ipk）
+- [x] 下载真实 ipk 校验内容：LuCI 文件落在 `/usr/lib/lua/luci/...`、
+      daed 二进制 59,613,346 bytes（ELF x86-64）、conffiles 正确
+- [x] 设备（ImmortalWrt 25.12.2 / apk-tools 3.0.5）上 `apk add --simulate` 预演：
+      daed 判为升级（1.27.0-r1 → 2026.10.16-r1），依赖齐备，不再误删 kmod-xdp-sockets-diag
+- [ ] 设备上真正 `apk add` 安装（未执行，等你决定）
+- [ ] 安装后确认 LuCI 菜单与 Header 的「内核 vX」显示
+
+### 已知取舍：luci-app-daed 的版本号
+
+设备上官方 `luci-app-daed` 是 `26.236.50544~cb5d434`，而本仓 `PKG_VERSION=2.1.1`。
+apk 按数值比较版本，实测：
+
+```
+apk version -t 2.1.1-r1      26.236.50544~cb5d434  →  <   本仓更旧（判降级）
+apk version -t 2026.10.16-r1 26.236.50544~cb5d434  →  >   本仓更新
+```
+
+影响：`apk add ./luci-app-daed-*.apk` 仍能装上（输出 `Downgrading`），
+但之后 `apk upgrade` 可能被 feed 里的官方包替换回去。
+若要避免，把 `luci-app-daed/Makefile` 的 `PKG_VERSION` 改成日期（如 `2026.10.16`）；
+`daed` 包本身没这个问题（`2026.10.16-r1` > 官方 `1.27.0-r1`，判为升级）。
 
 ## 设备布局（szwjp/daed 与本仓都对齐到这里）
 
-实测设备（192.168.1.1，ImmortalWrt 24.10 x86_64）：
+实测设备（192.168.1.1，ImmortalWrt 25.12.2 x86_64，包管理器为 **apk** 不是 opkg）：
 
-| 路径 | 实际归属 | 维护者 |
+| 路径 | 实际归属 | 包管理器升级时会动吗 |
 |---|---|---|
-| `/usr/bin/daed` | 59.6MB 二进制 | 本仓的 daed 包 |
-| `/etc/init.d/daed` | procd init | 本仓 daed 包（conffile） |
-| `/etc/config/daed` | UCI 段 | 本仓 daed 包（conffile） |
-| `/etc/daed/wing.db` | 业务数据 | daed 运行时建；opkg 不动 |
-| `/etc/daed/geo-update.env` | jwt secret | daed 首次启动建；opkg 不动 |
-| `/etc/daed/geoip.dat` | 路由表 | 用户自跑 geo-update 任务 |
-| `/etc/daed/geosite.dat` | 域名表 | 用户自跑 geo-update 任务 |
-| `/var/log/daed/daed.log` | 日志 | procd 启动时建；opkg 不动 |
+| `/usr/bin/daed` | 59.6MB 二进制 | 会（换新版） |
+| `/etc/init.d/daed` | procd init | 是 conffile，改过则保留 |
+| `/etc/config/daed` | UCI 段 | 是 conffile，改过则保留 |
+| `/etc/daed/wing.db` | 业务数据 | 不碰 |
+| `/etc/daed/geo-update.env` | jwt secret | 不碰 |
+| `/etc/daed/geoip.dat` | 路由表 | 不碰（用户自跑 geo-update） |
+| `/etc/daed/geosite.dat` | 域名表 | 不碰（用户自跑 geo-update） |
+| `/var/log/daed/daed.log` | 日志 | 不碰 |
+
+参考：官方 daed 包还包含 `etc/config/daed`、`etc/init.d/daed`，并依赖
+`ca-bundle / kmod-sched-core / kmod-sched-bpf / kmod-veth / kmod-xdp-sockets-diag / libc`；
+geo 数据由独立的 `daed-geoip`、`daed-geosite` 两个包提供。
+本仓的 daed 包依赖已与官方对齐（含 `kmod-xdp-sockets-diag`）。
 
 ## License
 
