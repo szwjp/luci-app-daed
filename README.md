@@ -143,20 +143,25 @@ luci-app-daed/
 - [ ] 设备上真正 `apk add` 安装（未执行，等你决定）
 - [ ] 安装后确认 LuCI 菜单与 Header 的「内核 vX」显示
 
-### 已知取舍：luci-app-daed 的版本号
+### 版本策略：两个包都用 daed release 的日期
 
-设备上官方 `luci-app-daed` 是 `26.236.50544~cb5d434`，而本仓 `PKG_VERSION=2.1.1`。
-apk 按数值比较版本，实测：
+设备上官方包用的是 `<年>.<构建号>.<修订>` 形式（`daed 1.27.0-r1`、
+`luci-app-daed 26.236.50544~cb5d434`），而 apk 是按数值比较版本的。实测：
 
 ```
-apk version -t 2.1.1-r1      26.236.50544~cb5d434  →  <   本仓更旧（判降级）
-apk version -t 2026.10.16-r1 26.236.50544~cb5d434  →  >   本仓更新
+apk version -t 2.1.1-r1      26.236.50544~cb5d434  →  <   会被判降级 + feed 覆盖
+apk version -t 2026.10.16-r1 26.236.50544~cb5d434  →  >   正常升级
+apk version -t 2026.10.16-r1 1.27.0-r1             →  >   正常升级
 ```
 
-影响：`apk add ./luci-app-daed-*.apk` 仍能装上（输出 `Downgrading`），
-但之后 `apk upgrade` 可能被 feed 里的官方包替换回去。
-若要避免，把 `luci-app-daed/Makefile` 的 `PKG_VERSION` 改成日期（如 `2026.10.16`）；
-`daed` 包本身没这个问题（`2026.10.16-r1` > 官方 `1.27.0-r1`，判为升级）。
+所以本仓两个包的 `PKG_VERSION` 都用 **daed release 的日期**（`2026.10.16`）：
+
+- 首段 ≥ 26，稳压官方 luci-app-daed，`apk upgrade` 不会把我们的包换回去
+- 与 daed 二进制包的版本一致，一眼能对上「这个包对应哪天的二进制」
+- daed 上游版本号（2.1.1）单独记录在 `daed/Makefile` 的 `DAED_UPSTREAM_VERSION`
+
+`arch-test` 里有一条门禁：两个包的 `PKG_VERSION` 必须是 `YYYY.MM.DD` 且日期一致，
+防止有人改回 `1.4` / `2.1.1` 这类小于 26.x 的值。
 
 ## 设备布局（szwjp/daed 与本仓都对齐到这里）
 

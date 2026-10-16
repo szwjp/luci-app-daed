@@ -61,16 +61,20 @@ jobs:
             exit 1
           fi
 
-          # luci-app-daed 的版本不强制日期，但必须让 apk 版本比较赢过官方包：
-          # 设备上官方 luci-app-daed 是 26.236.50544~cb5d434，实测
-          #   apk version -t 2.1.1-r1      26.236.50544~cb5d434  →  <  降级
-          #   apk version -t 2026.10.16-r1 26.236.50544~cb5d434  →  >  升级
-          # 这里只警告不失败（维护者可以有意选择 2.1.1，代价是可能被 feed 覆盖）。
+          # luci-app-daed 同样必须用日期版本，且与 daed 包同一日期：
+          # 设备上官方 luci-app-daed 是 26.236.50544~cb5d434，apk 按数值比较，实测
+          #   apk version -t 2.1.1-r1      26.236.50544~cb5d434  →  <  判降级
+          #   apk version -t 2026.10.16-r1 26.236.50544~cb5d434  →  >  判升级
+          # 这条门禁防止有人改回 1.4/2.1.1 之类小于 26.x 的值，那样会被 feed 覆盖回去。
           LV="$(get_mk PKG_VERSION luci-app-daed/Makefile)"
-          case "$LV" in
-            [0-9][0-9][0-9][0-9].*) ;;
-            *) echo "::warning::luci-app-daed PKG_VERSION=$LV 数值小于官方 ImmortalWrt 包的 26.x：apk 会判降级，之后 apk upgrade 可能被 feed 的官方包覆盖。详见 luci-app-daed/Makefile 顶部注释" ;;
-          esac
+          if [[ ! "$LV" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
+            echo "::error::luci-app-daed/Makefile PKG_VERSION='$LV' 不是 YYYY.MM.DD：apk 版本比较下 1.4/2.1.1 都小于官方包的 26.x，会被判降级并被 feed 覆盖（应先跑 scripts/release-sync.sh）"
+            exit 1
+          fi
+          if [ "$LV" != "$DV" ]; then
+            echo "::error::两个包的 PKG_VERSION 不一致（daed=$DV luci=$LV）：同仓同发应保持同一日期"
+            exit 1
+          fi
 
           # PKG_HASH 不能是 skip（发布构建时必须有）。长度 64 hex = 256-bit SHA-256。
           HASH="$(get_mk PKG_HASH daed/Makefile)"

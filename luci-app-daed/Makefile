@@ -3,21 +3,21 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=luci-app-daed
 
 # 版本策略（与 scripts/release-sync.sh 配合，不要手改）：
-#   PKG_VERSION = daed 上游版本号（2.1.1）
-#   PKG_RELEASE 每次同步 +1 → 本仓 release tag = v2.1.1-rNN，逐次递增
+#   PKG_VERSION = daed release 的日期（与 daed/Makefile 保持同一日期）
+#   PKG_RELEASE = 同一天内重发时递增 → 本仓 release tag = v<日期>-rNN
 #
-# ⚠️ 已知取舍：设备上（ImmortalWrt 25.12）官方 luci-app-daed 的版本是
-# 26.236.50544~cb5d434。apk 按数值比较版本，实测（apk version -t）：
-#     2.1.1-r1      vs 26.236.50544~cb5d434  →  <   我们更旧
-#     2026.10.16-r1 vs 26.236.50544~cb5d434  →  >   我们更新
-# 所以 2.1.1 会被 apk 判成「降级」：本地文件仍可 apk add（输出 Downgrading），
-# 但之后任何一次 apk upgrade 都可能被 feed 里的官方包替换回去，我们的 LuCI 页消失。
+# 为什么用日期而不是 2.1.1（daed 上游版本号）：
+# 设备上（ImmortalWrt 25.12）官方 luci-app-daed 是 26.236.50544~cb5d434，
+# apk 按数值比较版本，实测（apk version -t）：
+#     2.1.1-r1       vs 26.236.50544~cb5d434  →  <   判降级
+#     2026.10.16-r1  vs 26.236.50544~cb5d434  →  >   判升级
+# 用 2.1.1 的话：本地文件仍能装上（apk 只提示 Downgrading），但之后任何一次
+# apk upgrade 都可能被 feed 里的官方包替换回去，本 fork 的 LuCI 页会消失。
+# 日期版本首段 ≥ 26，稳压官方包，且与 daed 二进制包的版本一致，便于对照。
 #
-# 想稳压官方包的版本比较，就把 PKG_VERSION 改成日期（如 2026.10.16）；
-# 想保留 2.1.1，建议设备上先 `apk del luci-app-daed luci-i18n-daed-zh-cn`，
-# 并避免让 feed 覆盖（或者干脆换个包名，例如 luci-app-daed-szwjp）。
-PKG_VERSION:=2.1.1
-PKG_RELEASE:=2
+# daed 上游版本号（2.1.1）记录在 daed/Makefile 的 DAED_UPSTREAM_VERSION。
+PKG_VERSION:=2026.10.16
+PKG_RELEASE:=1
 
 LUCI_TITLE:=LuCI for daed (szwjp/daed build)
 # +daed：daed 二进制包（本仓同仓 daed/ 子包提供，会替换官方 daed 包）

@@ -99,22 +99,24 @@ for v in PKG_VERSION PKG_RELEASE DAED_RELEASE_TAG PKG_HASH DAED_UPSTREAM_VERSION
   printf '  %-22s = %s\n' "$v" "$(get_mk "$v")"
 done
 
-# —— 3b. luci-app-daed 的 PKG_RELEASE 自增 ——
-# 本仓 release tag = v<luci PKG_VERSION>-r<luci PKG_RELEASE>（当前策略：
-# PKG_VERSION 固定为 daed 上游版本号 2.1.1，PKG_RELEASE 每次同步 +1，
-# 于是 tag 依次为 v2.1.1-r01、v2.1.1-r02……每次都产出新 release）。
-# PKG_VERSION 不动，避免覆盖维护者手写的版本号。
+# —— 3b. luci-app-daed 的版本 ——
+# 本仓 release tag = v<luci PKG_VERSION>-r<luci PKG_RELEASE>。两个包同仓同发，
+# 所以 luci 的 PKG_VERSION 跟着 daed 的日期走：
+#   - 日期变了 → PKG_VERSION 设成新日期，PKG_RELEASE 复位为 1
+#   - 日期没变（同日重发/仅 luci 有改动）→ PKG_RELEASE +1
+# 两者都会产生一个「新且更大」的版本，apk/opkg 才认得出要升级。
 LUCI_MF="luci-app-daed/Makefile"
 LUCI_VER="$(sed -nE 's/^[[:space:]]*PKG_VERSION:=(.*)/\1/p' "$LUCI_MF" | head -1 | tr -d ' \r')"
 LUCI_REL="$(sed -nE 's/^[[:space:]]*PKG_RELEASE:=([0-9]+).*/\1/p' "$LUCI_MF" | head -1)"
-LUCI_REL_NEW=$(( ${LUCI_REL:-0} + 1 ))
+if [ "$LUCI_VER" = "$NEW_VERSION" ]; then
+  LUCI_REL_NEW=$(( ${LUCI_REL:-0} + 1 ))
+  echo "  luci-app-daed PKG_VERSION 已是 $NEW_VERSION，PKG_RELEASE: ${LUCI_REL:-?} -> $LUCI_REL_NEW"
+else
+  LUCI_REL_NEW=1
+  sed "${SED_INPLACE[@]}" -E "s|^([[:space:]]*PKG_VERSION:=).*|\1$NEW_VERSION|" "$LUCI_MF"
+  echo "  luci-app-daed PKG_VERSION: $LUCI_VER -> $NEW_VERSION（PKG_RELEASE 复位为 1）"
+fi
 sed "${SED_INPLACE[@]}" -E "s|^([[:space:]]*PKG_RELEASE:=)[0-9]+|\1$LUCI_REL_NEW|" "$LUCI_MF"
-echo "  luci-app-daed PKG_VERSION=$LUCI_VER（不动），PKG_RELEASE: ${LUCI_REL:-?} -> $LUCI_REL_NEW"
-# 提醒：apk 版本比较下 2.1.1 < 官方 ImmortalWrt 包的 26.236.x，会被判降级
-case "$LUCI_VER" in
-  [0-9][0-9][0-9][0-9].*) ;;
-  *) echo "  ::warning::luci-app-daed PKG_VERSION=$LUCI_VER 数值小于官方包 26.x，apk 会判降级（详见该 Makefile 顶部注释）" ;;
-esac
 
 if [ "${SKIP_COMMIT:-0}" = "1" ]; then
   echo
