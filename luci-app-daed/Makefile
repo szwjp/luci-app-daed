@@ -17,7 +17,7 @@ PKG_NAME:=luci-app-daed
 # 想保留 2.1.1，建议设备上先 `apk del luci-app-daed luci-i18n-daed-zh-cn`，
 # 并避免让 feed 覆盖（或者干脆换个包名，例如 luci-app-daed-szwjp）。
 PKG_VERSION:=2.1.1
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 LUCI_TITLE:=LuCI for daed (szwjp/daed build)
 # +daed：daed 二进制包（本仓同仓 daed/ 子包提供，会替换官方 daed 包）
