@@ -37,6 +37,10 @@ jobs:
         run: python3 tests/i18n_coverage.py --fail-below 100
 
       - name: Makefile sanity checks
+        # gh api 需要显式给 token：GitHub runner 上没有已存的 gh 凭据，
+        # 不设 GH_TOKEN 时 gh 会直接失败（本地开发机因为有 gh auth 登录所以看不出来）
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           get_mk() { sed -nE "s/^[[:space:]]*$1:=(.*)/\1/p" "$2" | head -1 | tr -d ' \r'; }
