@@ -29,8 +29,17 @@ TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 echo "Downloading to compute sha256..."
 curl -sSL --fail -o "$TMP" "$ASSET_URL" || { echo "::error::下载 $ASSET_URL 失败"; exit 1; }
-HASH="$(sha256sum "$TMP" | awk '{print $1}')"
-SIZE="$(stat -c%s "$TMP" 2>/dev/null || stat -f%z "$TMP")"
+# macOS 用 shasum，Linux 用 sha256sum；stat 同样兼容
+if command -v sha256sum >/dev/null 2>&1; then
+  HASH="$(sha256sum "$TMP" | awk '{print $1}')"
+else
+  HASH="$(shasum -a 256 "$TMP" | awk '{print $1}')"
+fi
+if stat -c%s "$TMP" >/dev/null 2>&1; then
+  SIZE="$(stat -c%s "$TMP")"
+else
+  SIZE="$(stat -f%z "$TMP")"
+fi
 echo "PKG_HASH=$HASH  size=$SIZE"
 
 # 改 daed/Makefile：PKG_VERSION 与 PKG_HASH

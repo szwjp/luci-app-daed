@@ -32,11 +32,13 @@ scp bin/packages/*/*/{daed,luci-app-daed}_*.ipk root@192.168.1.1:/tmp/
 
 # 设备上
 ssh root@192.168.1.1
+# 第一次安装：opkg 看到 /etc/config/daed 已存在（你之前手动装的）会提示三路合并，选 N
+# 保留你改过的 UCI（enabled=1 / listen_addr=2023 等）
 opkg install /tmp/daed_*.ipk /tmp/luci-app-daed_*.ipk
-uci set daed.config.enabled='1'
-uci commit daed
+# 如果是全新设备才需要：
+# uci set daed.config.enabled='1' && uci commit daed
 /etc/init.d/daed enable
-/etc/init.d/daed start
+/etc/init.d/daed restart
 
 # 浏览器看
 # http://192.168.1.1/cgi-bin/luci/admin/services/daed
@@ -56,7 +58,14 @@ git pull origin main   # 或: git pull https://github.com/szwjp/luci-app-daed.gi
 make package/dae/luci-app-daed/compile V=s
 make package/dae/daed/compile V=s
 scp bin/packages/*/*/{daed,luci-app-daed}_*.ipk root@192.168.1.1:/tmp/
-ssh root@192.168.1.1 'opkg install /tmp/daed_*.ipk /tmp/luci-app-daed_*.ipk && /etc/init.d/daed restart'
+
+# 设备上：升级时 /etc/config/daed 与 /etc/init.d/daed 是 conffiles，
+# 你没改过的话自动被新版覆盖；改过则提示三路合并，**选 N 保留**。
+# wing.db / geo-update.env / geo*.dat / var/log/daed/daed.log
+# 全部不在 conffile 也不在 install 段，opkg 不会动——业务数据天然保留。
+ssh root@192.168.1.1
+opkg install /tmp/daed_*.ipk /tmp/luci-app-daed_*.ipk
+/etc/init.d/daed restart
 ```
 
 ## 仓库结构
@@ -91,13 +100,30 @@ luci-app-daed/
 
 ## 验证清单（已通过 / 待验证）
 
-- [x] 仓库结构完整、`find` 验证 14 个文件（含 Makefile ×2）
+- [x] 仓库结构完整、`find` 验证 18 个文件（含 Makefile ×2）
 - [x] LuCI lua 源（controller/cbi/view/po）可正常 parse（与 QiuSimons 一致）
 - [x] `daed/Makefile` 路径 A 形态：只有 `Build/Prepare` 解包 + `Build/Compile` no-op
-- [x] szwjp/daed build-custom.yml 已加 `release` job（commit 4c742aa）
-- [ ] szwjp/daed push 触发 build → 产 release（需等 build 跑完）
-- [ ] 在 192.168.1.1 设备上实际 `opkg install` 一次
+- [x] szwjp/daed build-custom.yml `release` job 跑通：run [38916721071](https://github.com/szwjp/daed/actions/runs/38916721071) 成功，release [v2.1.1-nightly-20261016](https://github.com/szwjp/daed/releases/tag/v2.1.1-nightly-20261016) 已发布
+- [x] `release-sync.yml` 跑通：run [38917361528](https://github.com/szwjp/luci-app-daed/actions/runs/38917361528) 输出「已是最新（2.1.1），跳过」
+- [x] opkg 升级链路模拟：wing.db / geo-update.env / 日志全部保留；/usr/bin/daed 升级到 59.6MB 新版
+- [x] `daed/files/daed.init` 与 ImmortalWrt 上游对齐（含 `--logfile` 等 procd 参数），不是 QiuSimons 的简化版
+- [ ] 在 192.168.1.1 设备上实际 `opkg install` 一次（待你授权）
 - [ ] 实际抓 Header 的 `coreVersion` 显示
+
+## 设备布局（szwjp/daed 与本仓都对齐到这里）
+
+实测设备（192.168.1.1，ImmortalWrt 24.10 x86_64）：
+
+| 路径 | 实际归属 | 维护者 |
+|---|---|---|
+| `/usr/bin/daed` | 59.6MB 二进制 | 本仓的 daed 包 |
+| `/etc/init.d/daed` | procd init | 本仓 daed 包（conffile） |
+| `/etc/config/daed` | UCI 段 | 本仓 daed 包（conffile） |
+| `/etc/daed/wing.db` | 业务数据 | daed 运行时建；opkg 不动 |
+| `/etc/daed/geo-update.env` | jwt secret | daed 首次启动建；opkg 不动 |
+| `/etc/daed/geoip.dat` | 路由表 | 用户自跑 geo-update 任务 |
+| `/etc/daed/geosite.dat` | 域名表 | 用户自跑 geo-update 任务 |
+| `/var/log/daed/daed.log` | 日志 | procd 启动时建；opkg 不动 |
 
 ## License
 

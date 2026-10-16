@@ -80,8 +80,9 @@ define Package/daed/description
 endef
 
 define Package/daed/conffiles
-/etc/daed/wing.db
+# opkg upgrade 时不擦的：UCI 配置（用户改过 enabled/listen 等）+ init 脚本（procd 行为）
 /etc/config/daed
+/etc/init.d/daed
 endef
 
 # —— 构建：只解包，不编译 ——
@@ -95,22 +96,38 @@ define Build/Compile
 	true
 endef
 
-# —— 安装：binary + init + UCI + geo 数据 ——
+# —— 安装：binary + init + UCI；geo 数据由用户的 geo-update 任务拉 ——
+# 路径完全对齐 ImmortalWrt upstream daed 的标准布局，便于维护：
+#   /usr/bin/daed                      二进制
+#   /etc/init.d/daed                   procd init（conffile）
+#   /etc/config/daed                   UCI 段（conffile）
+#
+# 不在本包中安装：
+#   /etc/daed/wing.db                  业务数据（运行时由 daed 创建）
+#   /etc/daed/geoip.dat geosite.dat    由用户自跑的 geo-update 任务拉
+#   /etc/daed/geo-update.env           jwt secret（由 daed 首次启动生成）
+#   /var/log/daed/daed.log             日志（procd 启动时创建）
+# 这样 opkg upgrade 不会擦任何运行时数据；用户只需重启 daed 就能换 binary。
 define Package/daed/install
+	# 1. 二进制
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/daed-linux-x86_64 $(1)/usr/bin/daed
 
+	# 2. procd init。来源：ImmortalWrt 上游 daed 包（2023 Tianling Shen），
+	#    与 QiuSimons/luci-app-daed 的 init 在 procd 参数上对齐：含 --logfile、
+	#    logfile-maxbackups/maxsize、limits core/nofile、respawn、stderr 1。
+	#    **文件由 conffiles 标记**：升级时如果用户没改过 init，会被新版覆盖；
+	#    改过则 opkg 提示三路合并。
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/daed.init $(1)/etc/init.d/daed
 
+	# 3. UCI 默认段
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/daed.config $(1)/etc/config/daed
 
-	# Geo 数据：放在 /etc/daed/，与 daed 默认读取路径一致。
-	# 用户也可以用自己系统的 geo-update 任务覆盖此处。
+	# 4. /etc/daed 目录占位（无文件）。让 daed 首次启动有处可创建
+	#    wing.db、geo-update.env；geo 数据由用户的 update 任务负责。
 	$(INSTALL_DIR) $(1)/etc/daed
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/geoip.dat  $(1)/etc/daed/geoip.dat
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/geosite.dat $(1)/etc/daed/geosite.dat
 endef
 
 $(eval $(call BuildPackage,daed))
