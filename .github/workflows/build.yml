@@ -146,6 +146,18 @@ jobs:
             echo "   ADB 容器与元数据可解析"
           done
 
+      - name: Upload package artifacts
+        # 放在校验之前：即使后面的校验或发版失败，也能从 run 页面下载包来排查。
+        uses: actions/upload-artifact@v7
+        with:
+          name: daed-packages
+          include-hidden-files: true   # 包在 .github/ 下，默认会被 upload-artifact 跳过
+          path: |
+            .github/*.apk
+            .github/*.ipk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Validate ipk packages
         run: |
           set -euo pipefail
@@ -153,22 +165,47 @@ jobs:
           ipks=(.github/*.ipk)
           for f in "${ipks[@]}"; do
             echo "== $f"
-            # ipk = gzip 压缩的 tar。校验 gzip 魔数 1f 8b（旧写法 head -c2 | grep -q '..'
-            # 只验证"有两个字节"，任何文件都过，等于没校验）。
+            # ipk = gzip 压缩的 tar（旧写法 `head -c2 | grep -q '..'` 只验证"有两个字节"，
+            # 任何文件都能过，等于没校验）。先验 gzip 魔数 1f 8b。
             magic="$(head -c 2 "$f" | od -An -tx1 | tr -d ' \n')"
             if [ "$magic" != "1f8b" ]; then
-              echo "::error::$f 不是 gzip（魔数 $magic），ipk 应为 gzip(tar)"
+              echo "::error::$f 不是 gzip（魔数 $magic）"
               exit 1
             fi
-            # 外层 tar 必须有 CONTROL/control
-            if ! tar -tzf "$f" | grep -qE '(^\./)?CONTROL/control$'; then
-              echo "::error::$f 缺少 CONTROL/control"
+
+            list="$(tar -tzf "$f")"
+            printf '%s\n' "$list" | sed 's/^/   /'
+
+            # 两种布局都要支持：
+            #   新版 ipkg-build: gzip(tar(./debian-binary, ./data.tar.gz, ./control.tar.gz))
+            #   旧版:            ar(debian-binary, control.tar.gz, data.tar.gz) / 或直接 CONTROL/
+            tmp="$(mktemp -d)"
+            ctl=""
+            if printf '%s\n' "$list" | grep -qE '(^\./)?control\.tar\.gz$'; then
+              ctl_member="$(printf '%s\n' "$list" | grep -E '(^\./)?control\.tar\.gz$' | head -1)"
+              tar -xzf "$f" -C "$tmp" "$ctl_member"
+              inner="$tmp/$(basename "$ctl_member")"
+              ctl="$(tar -xzf "$inner" -O ./control 2>/dev/null || tar -xzf "$inner" -O control)"
+              for need in data.tar.gz debian-binary; do
+                printf '%s\n' "$list" | grep -qE "(^\./)?${need}$" \
+                  || { echo "::error::$f 缺 $need（ipk 应含 debian-binary/data.tar.gz/control.tar.gz）"; exit 1; }
+              done
+            elif printf '%s\n' "$list" | grep -qE '(^\./)?CONTROL/control$'; then
+              m="$(printf '%s\n' "$list" | grep -E '(^\./)?CONTROL/control$' | head -1)"
+              ctl="$(tar -xzf "$f" -O "$m")"
+            else
+              echo "::error::$f 既没有 control.tar.gz 也没有 CONTROL/control"
               exit 1
             fi
-            ctl="$(tar -xzOf "$f" ./CONTROL/control 2>/dev/null || tar -xzOf "$f" CONTROL/control)"
+            rm -rf "$tmp"
+
+            if [ -z "$ctl" ]; then
+              echo "::error::$f 取不到 control 内容"
+              exit 1
+            fi
             for field in Package Version Architecture Depends Description; do
               printf '%s\n' "$ctl" | grep -q "^${field}:" \
-                || { echo "::error::$f CONTROL/control 缺 $field"; exit 1; }
+                || { echo "::error::$f control 缺 $field"; exit 1; }
             done
             # Depends 里不能残留 OpenWrt 构建期语法（@buildconfig 或 VAR:pkg）
             dep="$(printf '%s\n' "$ctl" | sed -nE 's/^Depends: (.*)/\1/p')"
