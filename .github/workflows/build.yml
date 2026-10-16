@@ -146,20 +146,37 @@ jobs:
             echo "   ADB 容器与元数据可解析"
           done
 
-      - name: Validate ipk packages (ipkg-build output)
+      - name: Validate ipk packages
         run: |
           set -euo pipefail
           shopt -s nullglob
           ipks=(.github/*.ipk)
           for f in "${ipks[@]}"; do
             echo "== $f"
-            # ipk = gzip 压缩的 tar，结构 CONTROL/ + data.tar.gz
-            file "$f"
-            if ! head -c 2 "$f" | grep -q '..'; then
-              echo "::error::$f 头部异常（不是 gzip？）"
+            # ipk = gzip 压缩的 tar。校验 gzip 魔数 1f 8b（旧写法 head -c2 | grep -q '..'
+            # 只验证"有两个字节"，任何文件都过，等于没校验）。
+            magic="$(head -c 2 "$f" | od -An -tx1 | tr -d ' \n')"
+            if [ "$magic" != "1f8b" ]; then
+              echo "::error::$f 不是 gzip（魔数 $magic），ipk 应为 gzip(tar)"
               exit 1
             fi
-            tar -tzf "$f" | head -10
+            # 外层 tar 必须有 CONTROL/control
+            if ! tar -tzf "$f" | grep -qE '(^\./)?CONTROL/control$'; then
+              echo "::error::$f 缺少 CONTROL/control"
+              exit 1
+            fi
+            ctl="$(tar -xzOf "$f" ./CONTROL/control 2>/dev/null || tar -xzOf "$f" CONTROL/control)"
+            for field in Package Version Architecture Depends Description; do
+              printf '%s\n' "$ctl" | grep -q "^${field}:" \
+                || { echo "::error::$f CONTROL/control 缺 $field"; exit 1; }
+            done
+            # Depends 里不能残留 OpenWrt 构建期语法（@buildconfig 或 VAR:pkg）
+            dep="$(printf '%s\n' "$ctl" | sed -nE 's/^Depends: (.*)/\1/p')"
+            case "$dep" in
+              *"@"*|*"_"*":")
+                echo "::error::$f Depends 含构建期语法：$dep"; exit 1 ;;
+            esac
+            printf '   OK: %s\n' "$(printf '%s\n' "$ctl" | sed -nE 's/^Package: (.*)/pkg=\1/p; s/^Version: (.*)/ver=\1/p' | tr '\n' ' ')"
           done
 
       - name: Derive and validate release version

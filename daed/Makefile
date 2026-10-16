@@ -3,36 +3,53 @@
 # Copyright (C) 2026 szwjp <szwjp@users.noreply.github.com>
 
 # 这个包是路径 A 的核心：二进制的源码是 szwjp/daed GitHub Release，
-# OpenWrt SDK 几乎不做编译动作，只是把 binary / init / config / geo 数据
-# 装进 ipk。daed 自身的三层依赖（dae + dae-wing + 前端）由 szwjp/daed
-# 的 Actions 在 GitHub side 跑好，sha 由那侧的 build-custom.yml 断言
+# OpenWrt SDK 几乎不做编译动作，只是把 binary / init / config 装进 ipk
+# （geo 数据不装，由设备上自跑的 geo-update 任务拉）。
+# daed 自身的三层依赖（dae + dae-wing + 前端）由 szwjp/daed 的 Actions
+# 在 GitHub side 跑好，sha 由那侧的 build-custom.yml 断言
 # "Assert dae-core pin matches dae main" 守住。
 #
-# 升级流程：szwjp/daed 推送 → 跑 build-custom.yml 产新 release →
-# 修本 Makefile 的 PKG_VERSION 与 PKG_HASH（或者用 scripts/release
-# 自动更新）→ 在你的 OpenWrt 源里 opkg upgrade。
+# 升级流程（全自动，见 .github/workflows/）：
+#   szwjp/daed push → build-custom.yml → 发 release（tag v2.1.1-nightly-YYYYMMDD）
+#     → 本仓 release-sync.yml 每天 09:00 探测 → scripts/release-sync.sh
+#       更新 PKG_VERSION / DAED_RELEASE_TAG / PKG_HASH / DAECORE_PIN
+#     → 本仓 build.yml 打包 apk+ipk → 发 release
+#     → 设备 opkg upgrade
+#
+# 本文件里那几个版本字段不要手改：跑 scripts/release-sync.sh 自动同步。
 #
 # 与 QiuSimons/luci-app-daed 的 daed/Makefile 关键差异：
 #   - 没有 Build/Prepare 里的 git clone dae + dae-wing + pnpm build
 #   - PKG_SOURCE_URL 指向 szwjp/daed release，不是 daeuniverse/daed
-#   - 不依赖 vmlinux-btf 与 5 个 DNS/eBPF patchset（运行时由 init 选 BTF 来源）
+#   - 不依赖 vmlinux-btf 与 5 个 DNS/eBPF patchset（BTF 走运行时）
 
 include $(TOPDIR)/rules.mk
 
 # —— 版本号 ——
-# 跟随 szwjp/daed release 的 tag。tag 形如 v2.1.1-nightly-20261016。
-# 改这里 + PKG_HASH + luci-app-daed/Makefile 即可发布新包。
+# PKG_VERSION 用 szwjp/daed release 的日期（tag 形如 v2.1.1-nightly-20261016）。
+# 为什么用日期而不是 2.1.1：opkg 靠版本号判断能否升级，日期每天单调递增，
+# 而 2.1.1 永远不变就永远升不上去。QiuSimons 也是这么做的（PKG_VERSION:=2026.08.26）。
+#
+# 下面这一整块由 scripts/release-sync.sh 自动同步（本地或 GitHub Action 都可跑）。
 PKG_NAME:=daed
-PKG_VERSION:=2.1.1
+PKG_VERSION:=2026.10.16
 PKG_RELEASE:=1
 
-# 源文件来自 szwjp/daed GitHub Release；asset 名固定，hash 在 release 页面拿。
+# szwjp/daed 的完整 release tag —— PKG_SOURCE_URL 用它，不能用 PKG_VERSION 拼，
+# 因为 tag 带 daily 后缀（是 v2.1.1-nightly-20261016，不是 v2.1.1-nightly）。
+DAED_RELEASE_TAG:=v2.1.1-nightly-20261016
+# 参考信息：daed 上游版本 + dae-core pin（便于人工核对这次二进制到底是什么）
+DAED_UPSTREAM_VERSION:=2.1.1
+DAECORE_PIN:=e3fee8fbc68a65167af13b685ab0b958757e20ee
+
+# 源文件来自 szwjp/daed GitHub Release；asset 名固定，hash 由 release-sync 计算。
+# 约定：PKG_SOURCE_URL 是「目录」，PKG_SOURCE 是「文件名」，
+# 完整地址 = ${PKG_SOURCE_URL}/${PKG_SOURCE}（OpenWrt 与 build-pkg.sh 都按这个来）。
 PKG_SOURCE:=daed-linux-x86_64.tar.gz
-PKG_SOURCE_URL:=https://github.com/szwjp/daed/releases/download/v$(PKG_VERSION)-nightly
+PKG_SOURCE_URL:=https://github.com/szwjp/daed/releases/download/$(DAED_RELEASE_TAG)
 PKG_HASH:=d107e6b6d5eed6ea5576be5cfb6e6280a444c7876b5c6bb5f2fe48222e2af2b5
 
 PKG_LICENSE:=AGPL-3.0-only MIT
-PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=szwjp <szwjp@users.noreply.github.com>
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
