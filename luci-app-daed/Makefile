@@ -16,7 +16,7 @@ PKG_NAME:=luci-app-daed
 # 日期版本首段 ≥ 26，稳压官方包，且与 daed 二进制包的版本一致，便于对照。
 #
 # daed 上游版本号（2.1.1）记录在 daed/Makefile 的 DAED_UPSTREAM_VERSION。
-PKG_VERSION:=2026.10.16
+PKG_VERSION:=2026.10.17
 PKG_RELEASE:=1
 
 LUCI_TITLE:=LuCI for daed (szwjp/daed build)
