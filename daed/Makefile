@@ -33,11 +33,11 @@ include $(TOPDIR)/rules.mk
 # 下面这一整块由 scripts/release-sync.sh 自动同步（本地或 GitHub Action 都可跑）。
 PKG_NAME:=daed
 PKG_VERSION:=2026.10.17
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 # szwjp/daed 的完整 release tag —— PKG_SOURCE_URL 用它，不能用 PKG_VERSION 拼，
 # 因为 tag 带 daily 后缀（是 v2.1.1-nightly-YYYYMMDD-<fork7>-<dae7>，不是 v2.1.1-nightly）。
-DAED_RELEASE_TAG:=v2.1.1-nightly-20261017-758ab9b-e3fee8f
+DAED_RELEASE_TAG:=v2.1.1-nightly-20261017-1a8c4cb-e3fee8f
 # 参考信息：daed 上游版本 + dae-core pin（便于人工核对这次二进制到底是什么）
 DAED_UPSTREAM_VERSION:=2.1.1
 DAECORE_PIN:=e3fee8fbc68a65167af13b685ab0b958757e20ee
@@ -47,7 +47,7 @@ DAECORE_PIN:=e3fee8fbc68a65167af13b685ab0b958757e20ee
 # 完整地址 = ${PKG_SOURCE_URL}/${PKG_SOURCE}（OpenWrt 与 build-pkg.sh 都按这个来）。
 PKG_SOURCE:=daed-linux-x86_64.tar.gz
 PKG_SOURCE_URL:=https://github.com/szwjp/daed/releases/download/$(DAED_RELEASE_TAG)
-PKG_HASH:=a03b93f35a1554708093f171d8b8dd2228aacd89712a7480f13018f2d152177a
+PKG_HASH:=8d1e72ef940d2de9ba32b3048139ba25cc2fc84ec125bf9dd4eb9b17d6a5b017
 
 PKG_LICENSE:=AGPL-3.0-only MIT
 PKG_MAINTAINER:=szwjp <szwjp@users.noreply.github.com>
