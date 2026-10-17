@@ -330,3 +330,26 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             echo "已创建失败 issue"
           fi
+
+  # 恢复自动收尾：打包/发版没有红（skipped 不算失败）就关闭失败 issue。
+  clear-failure:
+    needs: [test, build]
+    if: '!cancelled() && !failure()'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Close recovered failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="build 失败"
+          N="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+                --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1 || true)"
+          [ -n "$N" ] || { echo "::notice::没有未关闭的失败 issue，无需收尾"; exit 0; }
+          gh issue comment "$N" --repo "$GITHUB_REPOSITORY" \
+            --body "本轮已恢复：$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID。自动关闭。"
+          gh issue close "$N" --repo "$GITHUB_REPOSITORY"
+          echo "已关闭失败 issue #$N"

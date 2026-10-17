@@ -84,8 +84,27 @@ jobs:
           git push origin HEAD:main
           echo "已推送到 main"
 
+      # 熔断：build 连续失败时不再每 2 小时重试，避免无限烧构建/刷 issue。
+      # 恢复方式：修复后手动 dispatch build.yml 或 push 一次，成功即复位。
+      - name: Circuit breaker - build 连续失败熔断
+        id: breaker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          N="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?per_page=20" \
+                --jq '[.workflow_runs[].conclusion] | reduce .[] as $c ({count:0,done:false};
+                        if .done then . elif $c == "success" then .done = true
+                        elif $c == "failure" then .count += 1 else . end) | .count')"
+          echo "trailing_failures=$N" >> "$GITHUB_OUTPUT"
+          if [ "$N" -ge 3 ]; then
+            echo "::warning::build 已连续失败 $N 次，本轮暂停自动 dispatch（修复后手动 dispatch/push 一次即可恢复）"
+          else
+            echo "::notice::build 连续失败 $N 次，未触发熔断"
+          fi
+
       - name: Dispatch build for missing release
-        if: steps.sync.outputs.dispatch == 'true'
+        if: steps.sync.outputs.dispatch == 'true' && steps.breaker.outputs.trailing_failures < 3
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -129,3 +148,127 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             echo "已创建失败 issue"
           fi
+
+  # 保活：公开仓库 60 天无活动会被 GitHub 禁用 schedule。只在 HEAD 超过 25 天无提交时补一个提交。
+  keepalive:
+    needs: [sync]
+    if: '!cancelled()'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Keep repository active
+        run: |
+          set -euo pipefail
+          AGE_DAYS=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "HEAD 距今天数: $AGE_DAYS（阈值 25）"
+          if [ "$AGE_DAYS" -lt 25 ]; then
+            echo "::notice::仓库近 $AGE_DAYS 天有提交，无需保活"
+            exit 0
+          fi
+
+          git config user.name szwjp
+          git config user.email szwjp@users.noreply.github.com
+          mkdir -p .github
+          printf 'last keepalive: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .github/keepalive
+          git add .github/keepalive
+          git commit -q -m "chore: keepalive（公开仓库 60 天无活动会禁用 schedule）"
+
+          for i in 1 2 3; do
+            git fetch -q origin main
+            git rebase -q origin/main || { git rebase --abort 2>/dev/null || true; echo "::error::rebase 失败"; exit 1; }
+            if git push -q origin HEAD:main; then
+              echo "已推送保活提交（$AGE_DAYS 天无提交）"
+              exit 0
+            fi
+            echo "push 失败（第 $i 次），重试"
+            sleep 5
+          done
+          echo "::error::保活提交连续 3 次推送失败"
+          exit 1
+
+  # 自检（跨仓）：对端 szwjp/daed 的 schedule 是否还活着。
+  selfcheck:
+    needs: [sync]
+    if: '!cancelled()'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Self-check - 对端 schedule 是否存活
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          REPO="szwjp/daed"
+          WF="check-upstream.yml"
+          TITLE="szwjp/daed 的 schedule 疑似停摆"
+
+          STATE="$(gh api "repos/$REPO/actions/workflows/$WF" --jq .state 2>/dev/null || true)"
+          if [ -z "$STATE" ]; then
+            echo "::notice::读取对端 workflow 状态失败（网络/限流），本轮跳过自检"
+            exit 0
+          fi
+          LAST="$(gh api "repos/$REPO/actions/workflows/$WF/runs?event=schedule&per_page=1" \
+                   --jq '.workflow_runs[0].created_at // empty' 2>/dev/null || true)"
+          AGE="?"
+          STALE=false
+          if [ -n "$LAST" ]; then
+            AGE=$(( ( $(date +%s) - $(date -d "$LAST" +%s) ) / 3600 ))
+            [ "$AGE" -gt 30 ] && STALE=true
+          else
+            STALE=true
+          fi
+          [ "$STATE" != "active" ] && STALE=true
+          echo "对端 $REPO/$WF: state=$STATE，最近 schedule 运行 ${AGE}h 前"
+
+          if [ "$STALE" != "true" ]; then
+            echo "::notice::对端 schedule 正常"
+            exit 0
+          fi
+
+          BODY="$(printf '对端仓库的定时任务疑似停摆，需要人工确认。\n\n- 仓库: %s\n- workflow: %s\n- state: %s（期望 active）\n- 最近一次 schedule 运行: %s（阈值 30h）\n\n处理：去 https://github.com/%s/actions 确认；若被 GitHub 以「60 天无活动」禁用，点 Enable workflow。\n本检查由 szwjp/luci-app-daed 的 release-sync 自动执行。\n' \
+            "$REPO" "$WF" "$STATE" "${AGE}h 前" "$REPO")"
+          EXIST="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+                    --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1 || true)"
+          if [ -n "$EXIST" ]; then
+            UPDATED="$(gh issue view "$EXIST" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt' 2>/dev/null || true)"
+            if [ -n "$UPDATED" ] && [ $(( $(date +%s) - $(date -d "$UPDATED" +%s) )) -lt 43200 ]; then
+              echo "::warning::对端 schedule 异常（12h 内已记录，不重复评论）"
+              exit 0
+            fi
+            gh issue comment "$EXIST" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            echo "::warning::对端 schedule 异常，已在 issue #$EXIST 追加记录"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            echo "::warning::对端 schedule 异常，已创建 issue"
+          fi
+
+  # 恢复自动收尾：同步没有红（skipped 不算失败）时关闭同名失败 issue。
+  clear-failure:
+    needs: [sync]
+    if: '!cancelled() && !failure()'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Close recovered failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="release-sync 自动同步失败"
+          N="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+                --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1 || true)"
+          [ -n "$N" ] || { echo "::notice::没有未关闭的失败 issue，无需收尾"; exit 0; }
+          gh issue comment "$N" --repo "$GITHUB_REPOSITORY" \
+            --body "本轮已恢复：$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID。自动关闭。"
+          gh issue close "$N" --repo "$GITHUB_REPOSITORY"
+          echo "已关闭失败 issue #$N"

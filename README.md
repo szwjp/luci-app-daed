@@ -101,6 +101,9 @@ szwjp/daed push（或每日 check-upstream）
          DAED_RELEASE_TAG / PKG_HASH / DAECORE_PIN
        · 更新 luci-app-daed 的 PKG_VERSION / PKG_RELEASE → 本仓 release tag v<日期>-rNN
   → 若该 release tag 还不存在，release-sync 自动 dispatch build.yml 打包并发 release
+  → 构建连续失败 3 次后熔断：暂停自动 dispatch，修复后手动 dispatch/push 一次即恢复
+  保活：HEAD 超过 25 天无提交时自动提交 `.github/keepalive`（防止 60 天无活动被禁用 schedule）
+  自检：每轮检查对端 szwjp/daed 的 check-upstream 是否 active 且 30h 内有 schedule 运行，异常开 issue
        · build 失败 → 开 issue 记录 run 链接，2 小时后下一轮自动重试（不用手动重跑）
        · build 成功 → release 已存在，下一轮幂等跳过
   → 设备 apk add / opkg install 新包
