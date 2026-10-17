@@ -1,20 +1,28 @@
 name: Release Sync
 
-# 每日 UTC 01:00（北京时间 09:00）轮询 szwjp/daed 最新 nightly release。
+# 每 2 小时（UTC 偶数整点）轮询 szwjp/daed 最新 nightly release。
 # 逻辑全部在 scripts/release-sync.sh 里（幂等：已同步则直接退出 0），
 # 这样本地手动跑和 CI 跑的是同一段代码，不会两处漂移。
 #
-# 脚本会改 daed/Makefile 的 PKG_VERSION / DAED_RELEASE_TAG / PKG_HASH /
-# DAECORE_PIN，并给 luci-app-daed 的 PKG_RELEASE +1，然后 commit（本 workflow 负责 push）。
-# commit message 含 [skip release-sync] 时跳过。
+# 脚本会改 daed/Makefile 的 PKG_VERSION / PKG_RELEASE / DAED_RELEASE_TAG /
+# PKG_HASH / DAECORE_PIN，以及 luci-app-daed 的 PKG_VERSION / PKG_RELEASE，
+# 然后 commit（本 workflow 负责 push）。
+#
+# 自愈：同步后不论本次是否产生 commit，都算一遍「luci 期望的 release tag」，
+# 该 release 不存在就 dispatch build.yml。build 失败 → 2 小时后下一轮自动重试；
+# build 成功 → release 已存在，下一轮幂等跳过。
+#
+# 失败可见性：job 失败时 notify job 开 issue（已有同标题则追加评论）。
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *"
+    - cron: "0 */2 * * *"
 
 permissions:
-  contents: write
+  contents: write   # push main
+  actions: write    # gh workflow run build.yml
+  issues: write     # notify job
 
 concurrency:
   group: release-sync
@@ -46,9 +54,78 @@ jobs:
             echo "无变化"
           fi
 
+          # 期望的 release tag = v<luci PKG_VERSION>-r<PKG_RELEASE 两位等宽>。
+          # 必须与 build.yml 里的 canon 规则一致（r2 → r02），否则会一直误判
+          # 「release 不存在」，每 2 小时 dispatch 一次重复构建。
+          MK_V="$(sed -n 's/^PKG_VERSION:=//p' luci-app-daed/Makefile | head -1)"
+          MK_R="$(sed -n 's/^PKG_RELEASE:=//p' luci-app-daed/Makefile | head -1)"
+          EXPECTED="${MK_V}-r${MK_R}"
+          if [[ ! "$EXPECTED" =~ ^[0-9][0-9A-Za-z.]*-r[0-9]+$ ]]; then
+            echo "::error::luci-app-daed/Makefile 版本 $EXPECTED 非法"
+            exit 1
+          fi
+          TAG_VERSION="$(printf '%s-r%02d' "${EXPECTED%-r*}" "$((10#${EXPECTED##*-r}))")"
+          RELEASE_TAG="v$TAG_VERSION"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "luci 期望 release: $RELEASE_TAG"
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "$RELEASE_TAG 已存在，无需 dispatch"
+          else
+            echo "dispatch=true" >> "$GITHUB_OUTPUT"
+            echo "$RELEASE_TAG 不存在，需要 dispatch build.yml"
+          fi
+
       - name: Push
         if: steps.sync.outputs.changed == 'true'
         run: |
           set -euo pipefail
           git push origin HEAD:main
           echo "已推送到 main"
+
+      - name: Dispatch build for missing release
+        if: steps.sync.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 放在 push 之后：workflow_dispatch 从 main 的最新 commit 起跑，
+          # 必须让 build 看到本轮 sync 写进去的版本号
+          gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "已 dispatch build.yml（目标 release ${{ steps.sync.outputs.release_tag }}）"
+
+  # 失败可见性：同步失败（比如 daed 侧没有新格式 release、API 抖动、push 冲突）
+  # 时确保有一个 open issue 记录。已有同标题只追加评论，避免每 2 小时刷屏。
+  notify:
+    needs: [sync]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report failure as an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="release-sync 自动同步失败"
+          BODY="$(printf 'daed → 本仓的自动同步链路失败，需要人工看一下。\n\n- run: %s/%s/actions/runs/%s\n- 提交: %s\n- 事件: %s\n\n排查：run 页面的 Summary → scripts/release-sync.sh 的输出\n（szwjp/daed 是否已发新格式 tag v*-nightly-YYYYMMDD-<fork sha7>-<dae sha7>？API 是否抖动？）\n→ 本仓 build.yml 是否被 dispatch 成功。\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$GITHUB_EVENT_NAME")"
+          EXIST="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+                    --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1 || true)"
+          if [ -n "$EXIST" ]; then
+            # 去重：持续失败时每 2 小时都会走到这里，12 小时内不重复刷评论。
+            UPDATED="$(gh issue view "$EXIST" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt' 2>/dev/null || true)"
+            if [ -n "$UPDATED" ]; then
+              AGE=$(( $(date +%s) - $(date -d "$UPDATED" +%s) ))
+              if [ "$AGE" -lt 43200 ]; then
+                echo "::notice::issue #$EXIST 12 小时内已更新过，本轮不重复评论"
+                exit 0
+              fi
+            fi
+            gh issue comment "$EXIST" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            echo "已在已有 issue #$EXIST 追加失败记录"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            echo "已创建失败 issue"
+          fi

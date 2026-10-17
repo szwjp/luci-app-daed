@@ -11,7 +11,7 @@
 #
 # 升级流程（全自动，见 .github/workflows/）：
 #   szwjp/daed push → build-custom.yml → 发 release（tag v2.1.1-nightly-YYYYMMDD-<fork7>-<dae7>）
-#     → 本仓 release-sync.yml 每天 09:00 探测 → scripts/release-sync.sh
+#     → 本仓 release-sync.yml 每 2 小时探测 → scripts/release-sync.sh
 #       更新 PKG_VERSION / DAED_RELEASE_TAG / PKG_HASH / DAECORE_PIN
 #     → 本仓 build.yml 打包 apk+ipk → 发 release
 #     → 设备 opkg upgrade

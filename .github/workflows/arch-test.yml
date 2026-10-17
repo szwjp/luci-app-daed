@@ -5,7 +5,7 @@ name: Arch test
 # build.yml 用 workflow_call 让 release 走同一份门禁，避免两套实现漂移。
 #
 # 检查项：
-#   1) i18n 覆盖率（po/zh_Hans 必须 100% 翻译所有 pot msgid）
+#   1) i18n 覆盖率（luasrc 里 translate() 的 msgid 必须在 po/zh_Hans 里全部翻译）
 #   2) Makefile 关键字段齐整（PKG_NAME/PKG_VERSION/PKG_RELEASE/HASH 等）
 #   3) daed 包能解析到 PKG_HASH（脚本层面的"是否对齐"哨兵，不下二进制）
 #   4) YAML / 脚本语法
@@ -96,9 +96,11 @@ jobs:
           fi
 
           # DAED_RELEASE_TAG 必须存在且对应真实 release；PKG_SOURCE_URL 必须指向它。
+          # 新格式（跨仓契约）：v<上游版本>-nightly-<YYYYMMDD>-<fork sha7>-<dae-core sha7>
+          # 例 v2.1.1-nightly-20261017-58fc2f0-a1b2c3d；旧格式（无 sha 后缀）不再产生。
           TAG="$(get_mk DAED_RELEASE_TAG daed/Makefile)"
-          if [[ ! "$TAG" =~ ^v[0-9].*-nightly-[0-9]{8}$ ]]; then
-            echo "::error::daed/Makefile DAED_RELEASE_TAG='$TAG' 不是 v*-nightly-YYYYMMDD"
+          if [[ ! "$TAG" =~ ^v[0-9].*-nightly-[0-9]{8}-[0-9a-f]{7}-[0-9a-f]{7}$ ]]; then
+            echo "::error::daed/Makefile DAED_RELEASE_TAG='$TAG' 不是 v*-nightly-YYYYMMDD-<fork sha7>-<dae sha7>"
             exit 1
           fi
           # PKG_SOURCE_URL 通常写成 .../download/$(DAED_RELEASE_TAG)，这里把
@@ -123,8 +125,10 @@ jobs:
           fi
           echo "版本检查通过：daed $DV ($TAG), hash ${HASH:0:8}…, 资产 HTTP $CODE"
 
-          # 交叉校验：arch-test 的 PKG_VERSION（YYYY.MM.DD）应与 tag 里的日期一致
+          # 交叉校验：arch-test 的 PKG_VERSION（YYYY.MM.DD）应与 tag 里的日期一致。
+          # tag 形如 v2.1.1-nightly-20261017-58fc2f0-a1b2c3d，取 "-nightly-" 之后的前 8 位。
           TAG_DATE="${TAG##*-nightly-}"
+          TAG_DATE="${TAG_DATE:0:8}"
           EXPECT_DATE="${TAG_DATE:0:4}.${TAG_DATE:4:2}.${TAG_DATE:6:2}"
           if [ "$DV" != "$EXPECT_DATE" ]; then
             echo "::error::PKG_VERSION=$DV 与 DAED_RELEASE_TAG=$TAG 的日期 $EXPECT_DATE 不一致"
@@ -140,5 +144,6 @@ jobs:
               || { echo "::error::$f YAML 解析失败"; exit 1; }
           done
           bash -n scripts/release-sync.sh
-          bash -n .github/build-pkg.sh 2>/dev/null || true
+          # build-pkg.sh 是真正打包的脚本，语法错误必须在这里红，不能 || true 吞掉
+          bash -n .github/build-pkg.sh
           echo "全部语法检查通过"

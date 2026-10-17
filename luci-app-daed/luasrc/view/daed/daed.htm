@@ -1,6 +1,8 @@
 <%+header%>
 <%
-	local running = luci.sys.exec("pgrep -x /usr/bin/daed")
+	-- pgrep -x 只比较进程名（不含路径），传 "/usr/bin/daed" 永远匹配不到；
+	-- 这里与 daed_status 状态栏一致，用 pidof daed。
+	local running = luci.sys.exec("pidof daed")
 %>
 <% if tonumber(running) ~= nil then %>
 	<div class="cbi-map">
@@ -19,17 +21,14 @@
 	</style>
 	<script type="text/javascript">
 		var listenAddr = "<%=luci.model.uci.cursor():get_first("daed", "daed", "listen_addr") or ''%>";
-		var dashboardPort = "<%=luci.model.uci.cursor():get_first("daed", "daed", "dashboard_port") or ''%>";
 		
+		// daed 二进制只有 --listen，没有单独的 dashboard 端口参数，
+		// 所以 iframe 端口只能从 listen_addr 推导。
 		var port = "";
-		if (dashboardPort && dashboardPort.trim() !== "") {
-			port = dashboardPort.trim();
-		} else {
-			var portRegex = /:(\d+)/;
-			var match = listenAddr.match(portRegex);
-			if (match && match[1]) {
-				port = match[1];
-			}
+		var portRegex = /:(\d+)/;
+		var match = listenAddr.match(portRegex);
+		if (match && match[1]) {
+			port = match[1];
 		}
 		
 		if (port) {

@@ -25,6 +25,7 @@ concurrency:
 
 permissions:
   contents: write
+  issues: write   # notify job
 
 env:
   APK_TOOLS_REF: 'b5a31c0d865342ad80be10d68f1bb3d3ad9b0866'
@@ -293,3 +294,39 @@ jobs:
           # 2) 清前 1 周的 workflow artifact（保险）
           echo "(artifact 由 GitHub 端 retention 清理，这里不主动动)"
         continue-on-error: true
+
+  # 失败可见性：test（arch-test 门禁）或 build 任一失败时，确保有一个 open issue
+  # 记录 run 链接。build 由 release-sync 每 2 小时自动 dispatch，失败会在下一轮重试，
+  # 但重试前得先有人知道——所以这里开 issue；已有同标题只追加评论，避免刷屏。
+  notify:
+    needs: [test, build]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report failure as an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE="build 失败"
+          BODY="$(printf 'luci-app-daed 打包/发版失败，需要人工看一下。\n\n- run: %s/%s/actions/runs/%s\n- 提交: %s\n- 事件: %s\n- ref: %s\n\n排查：先看 arch-test 门禁（i18n / Makefile 字段 / daed release tag 与资产）\n再看出包与发版；失败后 release-sync 下一轮会重新 dispatch，不用手动重跑。\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$GITHUB_EVENT_NAME" "$GITHUB_REF_NAME")"
+          EXIST="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+                    --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1 || true)"
+          if [ -n "$EXIST" ]; then
+            # 去重：持续失败时每 2 小时都会走到这里，12 小时内不重复刷评论。
+            UPDATED="$(gh issue view "$EXIST" --repo "$GITHUB_REPOSITORY" --json updatedAt --jq '.updatedAt' 2>/dev/null || true)"
+            if [ -n "$UPDATED" ]; then
+              AGE=$(( $(date +%s) - $(date -d "$UPDATED" +%s) ))
+              if [ "$AGE" -lt 43200 ]; then
+                echo "::notice::issue #$EXIST 12 小时内已更新过，本轮不重复评论"
+                exit 0
+              fi
+            fi
+            gh issue comment "$EXIST" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            echo "已在已有 issue #$EXIST 追加失败记录"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            echo "已创建失败 issue"
+          fi

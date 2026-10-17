@@ -7,6 +7,12 @@ msgstr "DAED"
 msgid "DAE is a Linux high-performance transparent proxy solution based on eBPF, And DAED is a modern dashboard for dae."
 msgstr "DAE是一个基于eBPF的Linux高性能透明代理解决方案,而DAED是DAE的管理面板。"
 
+msgid "Global Settings"
+msgstr "全局设置"
+
+msgid "Enable"
+msgstr "启用"
+
 msgid "Base Setting"
 msgstr "基本设置"
 

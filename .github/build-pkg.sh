@@ -350,7 +350,11 @@ build_one() {
 
 		if [ "${#conffiles[@]}" -gt 0 ]; then
 			printf '%s\n' "${conffiles[@]}" > "$temp_pkg_dir/lib/apk/packages/$pkg_name.conffiles"
-		else
+		elif [ -f "$temp_pkg_dir/etc/config/$app_id" ]; then
+			# 兜底：只有包内真的装了 /etc/config/<app> 才把它声明成自己的 conffile。
+			# luci-app-daed 是纯 LuCI 包，/etc/config/daed 属于 daed 包；无条件写
+			# fallback 会让 luci-app-daed.apk 抢声明别人的 conffile（审查 P1-3），
+			# 升级时两边都宣称保护同一文件，行为不可预期。
 			echo "/etc/config/$app_id" > "$temp_pkg_dir/lib/apk/packages/$pkg_name.conffiles"
 		fi
 		# 算静态 hash（apk v3 用 .conffiles_static）
@@ -443,7 +447,9 @@ build_one() {
 
 		if [ "${#conffiles[@]}" -gt 0 ]; then
 			printf '%s\n' "${conffiles[@]}" > "$temp_pkg_dir/CONTROL/conffiles"
-		else
+		elif [ -f "$temp_pkg_dir/etc/config/$app_id" ]; then
+			# 兜底条件同 apk 分支：包内没有 /etc/config/<app> 就不写该文件，
+			# 避免纯 LuCI 包把 daed 包的 conffile 声明成自己的。
 			echo "/etc/config/$app_id" > "$temp_pkg_dir/CONTROL/conffiles"
 		fi
 
