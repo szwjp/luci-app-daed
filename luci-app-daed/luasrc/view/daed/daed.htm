@@ -6,6 +6,15 @@
 %>
 <% if tonumber(running) ~= nil then %>
 	<div class="cbi-map">
+		<div class="daed-actions">
+			<a id="daed-open" class="cbi-button cbi-input-neutral" href="#" target="_blank" rel="noreferrer noopener" style="display: inline-block; padding: .5rem 1rem; border-radius: .375rem; background: #e6b800; color: #1c1c1c; font-weight: 600; text-decoration: none;">在新标签打开 daed 面板</a>
+			<code id="daed-url" class="daed-url"></code>
+		</div>
+		<div id="daed-hint" class="daed-hint" style="display: none;">
+			当前 LuCI 页面使用 <b>HTTPS</b>，而 daed 面板只提供 <b>HTTP</b>（daed 没有 TLS 支持），
+			浏览器会以「混合内容」为由拦截内嵌的 HTTP 页面，因此下方嵌入区域无法加载。
+			请点击上方「在新标签打开 daed 面板」按钮。
+		</div>
 		<iframe id="daed" class="daed-iframe"></iframe>
 	</div>
 	<style>
@@ -17,6 +26,24 @@
 		border-radius: .375rem;
 		box-shadow: rgba(0, 0, 0, 0.75) 0px 0px 15px -5px;
 		display: block;
+	}
+	.daed-actions {
+		display: flex;
+		align-items: center;
+		gap: .5rem;
+		flex-wrap: wrap;
+		margin: 0 0 .75rem 0;
+	}
+	.daed-url {
+		font-size: .85rem;
+		opacity: .75;
+	}
+	.daed-hint {
+		margin: 0 0 .75rem 0;
+		padding: .6rem .8rem;
+		border-radius: .375rem;
+		border: 1px solid rgba(255, 152, 0, .45);
+		background: rgba(255, 152, 0, .12);
 	}
 	</style>
 	<script type="text/javascript">
@@ -30,16 +57,40 @@
 		if (match && match[1]) {
 			port = match[1];
 		}
-		
-		if (port) {
-			var protocol = window.location.protocol;
-			var hostname = window.location.hostname;
-			var url = protocol + "//" + hostname;
-			
-			if (!((protocol === "http:" && port === "80") || (protocol === "https:" && port === "443"))) {
-				url += ":" + port;
+		if (!port) {
+			port = "2023";
+		}
+
+		var hostname = window.location.hostname;
+
+		// daed 二进制只有 --listen，没有 TLS 选项，只提供 HTTP。
+		// 因此面板地址一律用 http：HTTPS 父页里嵌 http 会被浏览器按「混合内容」拦截，
+		// 所以 HTTPS 下改成给出提示 + 新标签打开，不再往 iframe 里塞。
+		var url = "http://" + hostname;
+		if (port !== "80") {
+			url += ":" + port;
+		}
+		url += "/";
+
+		var openBtn = document.getElementById("daed-open");
+		if (openBtn) {
+			openBtn.setAttribute("href", url);
+		}
+		var urlBox = document.getElementById("daed-url");
+		if (urlBox) {
+			urlBox.textContent = url;
+		}
+
+		if (window.location.protocol === "https:") {
+			var hint = document.getElementById("daed-hint");
+			if (hint) {
+				hint.style.display = "block";
 			}
-			
+			var frame = document.getElementById("daed");
+			if (frame) {
+				frame.style.display = "none";
+			}
+		} else {
 			document.getElementById("daed").src = url;
 		}
 	</script>
