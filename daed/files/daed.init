@@ -55,6 +55,48 @@ restore_resolv_conf() {
 	rm -f "$RESOLV_DAED"
 }
 
+# 路由器重启后 pppd 往往还要拨 20 秒左右，而 S99 的 daed 早就起来了。
+# dae 内核一启动就把 eBPF 程序挂到接口上，此时默认路由还不存在，LAN 回程包
+# 会以 "network is unreachable" 失败（luci-app-dae 在真机上踩过同样的坑）。
+# 所以 boot 阶段先等 WAN 逻辑接口 up，最多 wan_timeout 秒；WAN 始终不通时
+# 也要照常启动，否则操作员修好线路后还得手工拉一次服务。
+wait_for_wan() {
+	local timeout="$1" i=0 wan
+
+	. /lib/functions/network.sh
+	network_find_wan wan 2>/dev/null || return 0
+	[ -n "$wan" ] || return 0
+
+	while [ "$i" -lt "$timeout" ]; do
+		if ubus call "network.interface.$wan" status 2>/dev/null | grep -q '"up": true'; then
+			logger -t daed "WAN $wan is up after ${i}s"
+			return 0
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+
+	logger -t daed "WAN $wan did not come up within ${timeout}s, starting anyway"
+	return 1
+}
+
+# rc.common 在 source 本文件之前定义 boot()，这里的同名函数会覆盖它。
+boot() {
+	local enabled delay timeout
+
+	config_load "$CONF"
+	config_get_bool enabled "config" "enabled" 0
+	[ "$enabled" -eq 1 ] || return 0
+
+	config_get_bool delay "config" "delay_start" 1
+	config_get timeout "config" "wan_timeout" 60
+	if [ "$delay" -eq 1 ] && [ "$timeout" -gt 0 ]; then
+		wait_for_wan "$timeout"
+	fi
+
+	start "$@"
+}
+
 start_service() {
 	local enabled listen_addr log_maxbackups log_maxsize hijack_resolv
 

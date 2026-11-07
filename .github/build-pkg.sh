@@ -338,6 +338,11 @@ build_one() {
 		mkdir -p "$temp_pkg_dir/etc/hotplug.d/iface"
 		cp -fp "$pkg_dir/files/98-daed" "$temp_pkg_dir/etc/hotplug.d/iface/98-daed"
 		chmod 0755 "$temp_pkg_dir/etc/hotplug.d/iface/98-daed"
+		# geo 数据更新：脚本 + 维护 crontab 条目的 init
+		cp -fp "$pkg_dir/files/daed-geo-update" "$temp_pkg_dir/usr/bin/daed-geo-update"
+		chmod 0755 "$temp_pkg_dir/usr/bin/daed-geo-update"
+		cp -fp "$pkg_dir/files/daed-geo-update.init" "$temp_pkg_dir/etc/init.d/daed-geo-update"
+		chmod 0755 "$temp_pkg_dir/etc/init.d/daed-geo-update"
 		rm -rf "$src_dir"
 	fi
 
@@ -391,7 +396,9 @@ build_one() {
 		local extra_postinst=""
 		if [ "$pkg_name" = "daed" ]; then
 			# 升级时二进制被替换，但 procd 实例不会因文件变化而重建，必须显式重启。
-			extra_postinst='/etc/init.d/daed enabled && /etc/init.d/daed restart'
+			extra_postinst='/etc/init.d/daed enabled && /etc/init.d/daed restart
+/etc/init.d/daed-geo-update enable
+/etc/init.d/daed-geo-update restart'
 		fi
 
 		cat > "$temp_dir/post-install" <<-EOF

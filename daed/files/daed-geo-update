@@ -1,0 +1,210 @@
+#!/bin/sh
+# daed-geo-update — 下载最新的 geoip.dat / geosite.dat 并重启 daed 让它生效。
+#
+# 数据源（唯一）：
+#   https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat
+#   https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat
+# 用 @release 分支而不是 @<tag>：tag 形式的 URL 会 404，分支始终指向最新构建产物。
+#
+# 目标目录：/usr/share/v2ray —— daed 的 init 通过 DAE_LOCATION_ASSET 指到这里，
+# 数据由 v2ray-geoip / v2ray-geosite 两个包提供；daed 只在启动时读取。
+#
+# 触发：由 daed-geo-update init 写进 root crontab 的任务调用，也可手工执行。
+#
+# 日志：/var/log/daed-geo-update.log（/var 是 tmpfs，重启即失），同时写 syslog。
+#
+# 备份：/etc/daed/geo-backup 保存上一版文件，新文件不可用时回滚。
+#
+# 校验：上游发布的 sha256 是唯一可信依据（CDN 的 content-length / content-range
+# 在实测中并不可靠）。sha256 不匹配会重下，最多 3 轮；最后还有大小区间与
+# protobuf 首字节 0x0a 两道廉价兜底。
+#
+# 回滚：geo 文件损坏会让 daed 起不来。脚本在清晨无人值守时运行，坏文件可能几小时
+# 后才被发现，所以安装后会重启并检查守护进程，起不来就换回上一版。
+
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+CONFIG=daed
+DIR=/usr/share/v2ray
+LOGFILE=/var/log/daed-geo-update.log
+BACKUP_DIR=/etc/daed/geo-backup
+WORK=/tmp/daed-geo-update.work
+LOCKFILE=/var/lock/daed-geo-update.lock
+HOST=cdn.jsdelivr.net
+REPO=Loyalsoldier/v2ray-rules-dat
+FILES="geosite.dat geoip.dat"
+MIN_BYTES=5000000
+MAX_BYTES=104857600
+MAX_ROUNDS=3
+FETCH_TIMEOUT=900
+START_TIMEOUT=90
+
+log() {
+	local line
+	line="$(date '+%F %T') $*"
+	echo "$line" >> "$LOGFILE" 2>/dev/null
+	logger -t daed-geo-update "$*" 2>/dev/null
+}
+
+die() {
+	log "FATAL: $*"
+	exit 1
+}
+
+cleanup() {
+	rm -rf "$WORK" 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+enabled() {
+	[ "$(uci -q get "$CONFIG.config.geo_update")" = "0" ] && return 1
+	return 0
+}
+
+daemon_enabled() {
+	[ "$(uci -q get "$CONFIG.config.enabled")" = "1" ]
+}
+
+file_hash() {
+	sha256sum "$1" 2>/dev/null | awk '{print $1}'
+}
+
+fetch_file() {
+	local f="$1" url
+	url="https://$HOST/gh/$REPO@release/$f"
+	if [ -s "$WORK/$f" ]; then
+		curl -fsS -C - --connect-timeout 20 --max-time "$FETCH_TIMEOUT" -o "$WORK/$f" "$url" 2>/dev/null
+	else
+		curl -fsS -r 0- --connect-timeout 20 --max-time "$FETCH_TIMEOUT" -o "$WORK/$f" "$url" 2>/dev/null
+	fi
+}
+
+fetch_verified() {
+	local f="$1" base expected got size magic round
+
+	base="https://$HOST/gh/$REPO@release"
+
+	curl -fsS --max-time 60 -o "$WORK/$f.sha256sum" "$base/$f.sha256sum" 2>/dev/null
+	expected="$(awk '{print $1}' "$WORK/$f.sha256sum" 2>/dev/null | head -n 1)"
+	[ -n "$expected" ] || log "$f: 上游没有 sha256，只剩大小与首字节校验"
+
+	round=1
+	while [ "$round" -le "$MAX_ROUNDS" ]; do
+		fetch_file "$f" || log "$f: 第 $round 轮未完成，继续续传"
+		got="$(file_hash "$WORK/$f")"
+		if [ -n "$expected" ] && [ -n "$got" ] && [ "$got" = "$expected" ]; then
+			log "$f: sha256 与上游一致（$got）"
+			return 0
+		fi
+		if [ -n "$expected" ]; then
+			log "$f: 第 $round 轮 sha256 不符（本地 ${got:-空}，上游 $expected），重新下载"
+		fi
+		rm -f "$WORK/$f"
+		round=$((round + 1))
+	done
+
+	if [ -f "$WORK/$f" ]; then
+		size="$(wc -c < "$WORK/$f")"
+		magic="$(hexdump -n 1 -e '1/1 "%02x"' "$WORK/$f" 2>/dev/null)"
+		if [ "$size" -ge "$MIN_BYTES" ] && [ "$size" -le "$MAX_BYTES" ] && [ "$magic" = "0a" ]; then
+			log "$f: sha256 始终不符，按大小（$size）与首字节接受，请人工复核"
+			return 0
+		fi
+		log "$f: 大小或首字节异常（$size 字节，首字节 '$magic'）"
+	fi
+	return 1
+}
+
+log "--- start ---"
+
+enabled || {
+	log "跳过：$CONFIG.config.geo_update 为 0"
+	exit 0
+}
+
+mkdir -p "$WORK" || die "无法创建临时目录 $WORK"
+mkdir -p "$BACKUP_DIR" || die "无法创建备份目录 $BACKUP_DIR"
+
+mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null
+if ! { exec 9>"$LOCKFILE"; } 2>/dev/null; then
+	die "无法创建锁文件 $LOCKFILE"
+fi
+if ! flock -n 9; then
+	log "跳过：已有一次更新在运行"
+	exit 0
+fi
+
+for f in $FILES; do
+	fetch_verified "$f" || die "$f: 下载或校验失败，不替换任何文件"
+done
+
+changed=0
+for f in $FILES; do
+	new="$(file_hash "$WORK/$f")"
+	old="$(file_hash "$DIR/$f")"
+	if [ -n "$old" ] && [ "$new" = "$old" ]; then
+		log "$f: 已是最新（$new），不动"
+		continue
+	fi
+	cp -f "$DIR/$f" "$BACKUP_DIR/$f.bak" 2>/dev/null
+	mv -f "$WORK/$f" "$DIR/$f" || die "无法替换 $f"
+	chmod 644 "$DIR/$f"
+	changed=1
+	log "$f: 已替换（$old -> $new）"
+done
+
+if [ "$changed" = "0" ]; then
+	log "OK: 两个文件都是最新，不重启 daed"
+	exit 0
+fi
+
+# daed 只在启动时读取 geo 数据，reload 不够，必须 restart。
+restart_daed() {
+	/etc/init.d/daed restart >/dev/null 2>&1
+}
+
+daed_running() {
+	/etc/init.d/daed status 2>/dev/null | grep -q '^running$'
+}
+
+# 服务本来就没启用时，不该因为"没在运行"就回滚数据。
+if ! daemon_enabled; then
+	log "OK: geo 数据已更新；daed 在 UCI 里是禁用状态，跳过重启与回滚检查"
+	exit 0
+fi
+
+restart_daed
+i=0
+OK=0
+while [ "$i" -lt "$START_TIMEOUT" ]; do
+	sleep 2
+	if daed_running; then
+		OK=1
+		break
+	fi
+	i=$((i + 2))
+done
+
+if [ "$OK" = "1" ]; then
+	log "OK: geoip/geosite 已更新，daed 重启后运行正常"
+	exit 0
+fi
+
+log "daed 没有起来，回滚全部文件"
+for f in $FILES; do
+	if [ -f "$BACKUP_DIR/$f.bak" ]; then
+		cp -f "$BACKUP_DIR/$f.bak" "$BACKUP_DIR/$f.rollback" && mv -f "$BACKUP_DIR/$f.rollback" "$DIR/$f"
+	fi
+done
+restart_daed
+sleep 5
+if daed_running; then
+	log "已回滚到上一版 geo 数据，daed 恢复正常"
+else
+	log "回滚后 daed 仍未运行，需要人工处理"
+fi
+log "FAILED"
+exit 1

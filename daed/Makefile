@@ -33,7 +33,7 @@ include $(TOPDIR)/rules.mk
 # 下面这一整块由 scripts/release-sync.sh 自动同步（本地或 GitHub Action 都可跑）。
 PKG_NAME:=daed
 PKG_VERSION:=2026.11.01
-PKG_RELEASE:=3
+PKG_RELEASE:=5
 
 # szwjp/daed 的完整 release tag —— PKG_SOURCE_URL 用它，不能用 PKG_VERSION 拼，
 # 因为 tag 带 daily 后缀（是 v2.1.1-nightly-YYYYMMDD-<fork7>-<dae7>，不是 v2.1.1-nightly）。
@@ -80,6 +80,7 @@ define Package/daed
   DEPENDS:=+ca-bundle +kmod-sched-core +kmod-sched-bpf \
            +kmod-veth +kmod-xdp-sockets-diag \
            +v2ray-geoip +v2ray-geosite \
+           +curl \
            @TARGET_x86 \
            +@KERNEL_XDP_SOCKETS \
            +DAED_USE_VMLINUX_BTF:vmlinux-btf
@@ -132,7 +133,7 @@ endef
 #
 # 不在本包中安装：
 #   /etc/daed/wing.db                  业务数据（运行时由 daed 创建）
-#   /etc/daed/geoip.dat geosite.dat    由用户自跑的 geo-update 任务拉
+#   /etc/daed/geoip.dat geosite.dat    geo 数据由 daed-geo-update 任务维护
 #   /etc/daed/geo-update.env           jwt secret（由 daed 首次启动生成）
 #   /var/log/daed/daed.log             日志（procd 启动时创建）
 # 这样 opkg upgrade 不会擦任何运行时数据；用户只需重启 daed 就能换 binary。
@@ -161,6 +162,12 @@ define Package/daed/install
 	#    卸载"只是界面"的包不该连带改变守护进程行为）。
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
 	$(INSTALL_BIN) ./files/98-daed $(1)/etc/hotplug.d/iface/98-daed
+
+	# 6. geo 数据更新：脚本 + 维护 root crontab 条目的 init。
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) ./files/daed-geo-update $(1)/usr/bin/daed-geo-update
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/daed-geo-update.init $(1)/etc/init.d/daed-geo-update
 endef
 
 # 升级时必须显式重启：apk 只替换磁盘上的文件，运行中的进程仍持有旧 inode，
@@ -169,6 +176,10 @@ define Package/daed/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 /etc/init.d/daed enabled && /etc/init.d/daed restart
+# 升级时 default_postinst 不会 enable "本次新加"的服务，这里显式补上，
+# 否则 S49daed-geo-update 缺失，改周期后要手工重启才生效。
+/etc/init.d/daed-geo-update enable
+/etc/init.d/daed-geo-update restart
 exit 0
 endef
 

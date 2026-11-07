@@ -1,0 +1,120 @@
+#!/bin/sh /etc/rc.common
+
+START=49
+STOP=11
+
+# 维护 root crontab 里那条 geo 数据更新任务。
+#
+# 任务本体是 /usr/bin/daed-geo-update（本包安装）。crond 读 /etc/crontabs/root，
+# procd 监视该文件，所以只要把条目写进去，crond 就会读到。
+#
+# 本服务跑在 crond 之前（START=49 对 cron 的 50）：crond 在 /etc/crontabs 目录
+# 为空时不会启动，先写条目能保证它启动时有 crontab 可读。
+#
+# 周期是 UCI 选项，不需要改包里的文件：
+#
+#   uci set daed.config.geo_update_cron='0 3 * * 1'
+#   uci commit daed
+#   /etc/init.d/daed-geo-update restart
+#
+# 用 daed.config.geo_update=0 可以整体关闭更新，此时条目会从 crontab 移除，
+# 而不是留着空跑。
+
+. /lib/functions.sh
+
+CONFIG=daed
+CRONTAB=/etc/crontabs/root
+JOB=/usr/bin/daed-geo-update
+DEFAULT_SCHEDULE="0 3 * * 1"
+
+schedule() {
+	local value
+	config_load "$CONFIG"
+	config_get value config geo_update_cron "$DEFAULT_SCHEDULE"
+	echo "${value:-$DEFAULT_SCHEDULE}"
+}
+
+update_enabled() {
+	local value
+	config_load "$CONFIG"
+	config_get_bool value config geo_update 1
+	echo "$value"
+}
+
+# 只删除本服务自己写的那一行。用命令词匹配，而不是"行里出现这个路径"：
+# 后者会把操作员写的带参数任务、或一条提到它的注释一起删掉。
+# 命令词后面必须没有任何参数（只有 install_job 追加的输出重定向），
+# 这样带参数的自定义任务会被保留。
+drop_job() {
+	awk -v job="$JOB" '
+		{
+			cmd = ""; rest = ""
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^[0-9*\/,?#-]+$/ || tolower($i) ~ /^(mon|tue|wed|thu|fri|sat|sun)(-(mon|tue|wed|thu|fri|sat|sun))?$/)
+					continue
+				cmd = $i
+				for (j = i + 1; j <= NF; j++)
+					rest = rest " " $j
+				break
+			}
+			sub(/[ \t]*>[ \t]*\/dev\/null[ \t]+2>&1[ \t]*$/, "", rest)
+			sub(/[ \t]+$/, "", rest)
+			if (cmd != job || rest != "")
+				print
+		}
+	' "$CRONTAB"
+}
+
+install_job() {
+	local line
+	mkdir -p /etc/crontabs || return 1
+	touch "$CRONTAB" || return 1
+	chmod 600 "$CRONTAB"
+
+	drop_job > "$CRONTAB.new" 2>/dev/null
+	line="$(schedule) $JOB >/dev/null 2>&1"
+	echo "$line" >> "$CRONTAB.new"
+	mv "$CRONTAB.new" "$CRONTAB" || return 1
+	chmod 600 "$CRONTAB"
+	logger -t daed-geo-update "scheduled: $line"
+	return 0
+}
+
+remove_job() {
+	[ -f "$CRONTAB" ] || return 0
+	drop_job > "$CRONTAB.new" 2>/dev/null
+	mv "$CRONTAB.new" "$CRONTAB" 2>/dev/null
+	chmod 600 "$CRONTAB" 2>/dev/null
+	return 0
+}
+
+# crond 在 /etc/crontabs 为空时不会启动；手工启动本服务时它可能还没起来。
+ensure_cron() {
+	[ -x /etc/init.d/cron ] || return 0
+	pgrep -f crond >/dev/null 2>&1 && return 0
+	/etc/init.d/cron start >/dev/null 2>&1
+}
+
+start() {
+	if [ "$(update_enabled)" = "1" ]; then
+		install_job || {
+			logger -t daed-geo-update "无法写入 $CRONTAB"
+			return 1
+		}
+		ensure_cron
+	else
+		remove_job
+	fi
+}
+
+stop() {
+	remove_job
+}
+
+# rc.common 的 disable 只删 rc.d 链接，cron 条目会留下来，所以这里一并清掉。
+disable() {
+	remove_job
+	name="$(basename "${initscript}")"
+	rm -f /etc/rc.d/S??$name
+	rm -f /etc/rc.d/K??$name
+}

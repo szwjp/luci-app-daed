@@ -229,6 +229,9 @@ apk version -t 2026.10.16-r1 1.27.0-r1             →  >   正常升级
 | `/usr/bin/daed` | 59.6MB 二进制 | 会（换新版） |
 | `/etc/init.d/daed` | procd init（含 env、可选 resolv 接管） | 是 conffile，改过则保留 |
 | `/etc/hotplug.d/iface/98-daed` | WAN up/update 时重启 daed | 会（随 daed 包更新） |
+| `/usr/bin/daed-geo-update` | geo 数据更新脚本 | 会（随 daed 包更新） |
+| `/etc/init.d/daed-geo-update` | 维护 geo 更新的 cron 条目 | 会（随 daed 包更新） |
+| `/etc/daed/geo-backup/` | geo 回滚备份 | 不碰 |
 | `/etc/config/daed` | UCI 段 | 是 conffile，改过则保留 |
 | `/etc/daed/wing.db` | 业务数据 | 不碰 |
 | `/etc/daed/geo-update.env` | jwt secret | 不碰 |
@@ -240,6 +243,48 @@ apk version -t 2026.10.16-r1 1.27.0-r1             →  >   正常升级
 `ca-bundle / kmod-sched-core / kmod-sched-bpf / kmod-veth / kmod-xdp-sockets-diag / libc`；
 geo 数据由独立的 `daed-geoip`、`daed-geosite` 两个包提供。
 本仓的 daed 包依赖已与官方对齐（含 `kmod-xdp-sockets-diag`）。
+
+## 启动时序与 geo 数据
+
+### 开机先等 WAN
+
+路由器重启后 pppd 往往还要拨 ~20 秒，而 `S99daed` 早就起来了。dae 内核一启动就把
+eBPF 程序挂到接口上，此时还没有默认路由，LAN 回程包会以 `network is unreachable`
+失败。所以 `daed.init` 覆盖了 `boot()`：先等 WAN 逻辑接口 up，最多
+`daed.config.wan_timeout` 秒（默认 60），然后照常启动。
+
+```sh
+uci set daed.config.delay_start=0     # 关掉等待，回到"立刻启动"
+uci set daed.config.wan_timeout=90    # 延长等待上限
+```
+
+WAN 超时未就绪时仍会启动（避免线路故障时 daed 永远起不来），并写一条 syslog。
+运行期间 WAN 重新拨号/换 IP 由 `98-daed` hotplug 负责重启 daed。
+
+### geo 数据定时更新
+
+`daed` 只在启动时读取 `geoip.dat` / `geosite.dat`（`DAE_LOCATION_ASSET=/usr/share/v2ray`），
+所以更新后必须重启。包内提供：
+
+| 文件 | 作用 |
+|---|---|
+| `/usr/bin/daed-geo-update` | 下载 → 校验 sha256 → 备份 → 替换 → 重启 → 失败回滚 |
+| `/etc/init.d/daed-geo-update` | 维护 root crontab 里那条任务（START=49，早于 cron） |
+| `/etc/daed/geo-backup/` | 上一版文件，回滚用 |
+
+```sh
+uci set daed.config.geo_update=1                 # 默认开
+uci set daed.config.geo_update_cron='0 3 * * 1'  # 默认每周一 03:00
+uci commit daed && /etc/init.d/daed-geo-update restart
+
+/usr/bin/daed-geo-update      # 立即跑一次
+tail -f /var/log/daed-geo-update.log
+```
+
+数据源是 Loyalsoldier/v2ray-rules-dat 的 `@release` 分支；上游发布的 `.sha256sum`
+是校验依据，失败重试 3 轮，最后还有大小区间与 protobuf 首字节兜底。若新数据让
+daed 起不来，脚本会自动换回 `/etc/daed/geo-backup` 里的上一版。
+daed 在 UCI 里被禁用时只换文件、不重启也不回滚。
 
 ## 从旧版本升级（2026-11 行为变更）
 

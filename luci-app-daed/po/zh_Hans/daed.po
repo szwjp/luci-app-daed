@@ -68,3 +68,21 @@ msgstr "DAED 未运行"
 
 msgid "Please start the DAED service first and try again"
 msgstr "请先启动 DAED 服务后重试"
+
+msgid "Wait for WAN before start"
+msgstr "启动前等待 WAN"
+
+msgid "Delay the boot-time start until the WAN interface is up. PPPoE usually needs about 20 seconds."
+msgstr "开机时等到 WAN 接口就绪再启动。PPPoE 一般需要约 20 秒。"
+
+msgid "WAN wait timeout (seconds)"
+msgstr "WAN 等待上限（秒）"
+
+msgid "Update geo data periodically"
+msgstr "定期更新 geo 数据"
+
+msgid "Refresh geoip.dat / geosite.dat on a schedule. daed only reads them at startup."
+msgstr "按计划刷新 geoip.dat / geosite.dat。daed 只在启动时读取。"
+
+msgid "Geo update schedule (cron)"
+msgstr "geo 更新周期（cron）"
