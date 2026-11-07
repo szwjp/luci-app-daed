@@ -33,7 +33,7 @@ include $(TOPDIR)/rules.mk
 # 下面这一整块由 scripts/release-sync.sh 自动同步（本地或 GitHub Action 都可跑）。
 PKG_NAME:=daed
 PKG_VERSION:=2026.11.01
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 # szwjp/daed 的完整 release tag —— PKG_SOURCE_URL 用它，不能用 PKG_VERSION 拼，
 # 因为 tag 带 daily 后缀（是 v2.1.1-nightly-YYYYMMDD-<fork7>-<dae7>，不是 v2.1.1-nightly）。

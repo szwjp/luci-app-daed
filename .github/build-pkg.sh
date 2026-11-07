@@ -341,6 +341,13 @@ build_one() {
 		rm -rf "$src_dir"
 	fi
 
+	# —— 统一属主为 root:root ——
+	# daed 的 release tarball 里记录的是构建机 uid/gid（实测 501:50），`cp -p` 会原样
+	# 带进包里，安装后 /usr/bin/daed 归 nobody 所有且 0755 —— nobody 可写，能替换
+	# root 随后执行的二进制。CI 在 fakeroot 下运行，chown 0:0 会被正确记录；
+	# 本地无 fakeroot 时失败不影响打包（仅测试产物属主不同）。
+	find "$temp_pkg_dir" -exec chown 0:0 {} + 2>/dev/null || true
+
 	# —— conffiles 写入 lib/upgrade/keep.d/<pkg>（apk 路径才有效，但写了无害）——
 	if [ "${#conffiles[@]}" -gt 0 ]; then
 		mkdir -p "$temp_pkg_dir/lib/upgrade/keep.d"

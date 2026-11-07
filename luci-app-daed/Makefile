@@ -17,7 +17,7 @@ PKG_NAME:=luci-app-daed
 #
 # daed 上游版本号（2.1.1）记录在 daed/Makefile 的 DAED_UPSTREAM_VERSION。
 PKG_VERSION:=2026.11.01
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 LUCI_TITLE:=LuCI for daed (szwjp/daed build)
 # +daed：daed 二进制包（本仓同仓 daed/ 子包提供，会替换官方 daed 包）
