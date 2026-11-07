@@ -28,6 +28,16 @@ export SOURCE_DATE_EPOCH="$PKG_SOURCE_DATE_EPOCH"
 BASE_DIR="$(cd "$(dirname "$0")"; pwd)"
 PKG_DIR="$BASE_DIR/.."
 
+# 临时目录统一在这里登记，EXIT 时清理。不能在各函数里用 local 变量做 trap：
+# trap 到进程退出才求值，那时 local 早已出作用域（审查 R20）。
+CLEANUP_DIRS=()
+cleanup() {
+	if [ "${#CLEANUP_DIRS[@]}" -gt 0 ]; then
+		rm -rf "${CLEANUP_DIRS[@]}"
+	fi
+}
+trap cleanup EXIT
+
 # 要打的包：每个元素是 "<子目录名>:<LuCI_luci_name>"
 # - luci-app-daed : 走 homeproxy 套路（PKGARCH=all）
 # - daed          : 路径 A，从 szwjp/daed release 拉 binary
@@ -200,7 +210,8 @@ build_one() {
 	[ -n "$description" ] || description="$pkg_name"
 
 	local pkg_arch
-	pkg_arch="$(get_mk_value "$mk" PKG_ARCH)"
+	pkg_arch="$(get_mk_value "$mk" PKGARCH)"
+	[ -n "$pkg_arch" ] || pkg_arch="$(get_mk_value "$mk" PKG_ARCH)"
 	if [ -z "$pkg_arch" ]; then
 		# luci 应用包默认 all；daed 二进制包是 x86_64
 		if [[ "$pkg_name" == luci-* ]]; then
@@ -236,7 +247,7 @@ build_one() {
 	while IFS= read -r line; do
 		[ -n "$line" ] && conffiles+=("$line")
 	done < <(get_conffiles "$mk" "$pkg_name")
-	if [ "${#conffiles[@]}" -eq 0 ]; then
+	if [ "${#conffiles[@]}" -eq 0 ] && [[ "$pkg_name" != luci-* ]]; then
 		echo "warning: $mk 缺 Package/$pkg_name/conffiles，包会缺 conffile 保护" >&2
 	fi
 
@@ -248,9 +259,8 @@ build_one() {
 
 	local temp_dir temp_pkg_dir
 	temp_dir="$(mktemp -d "$BASE_DIR/tmp.XXXXXX")"
-	trap 'rm -rf "$temp_dir"' EXIT
+	CLEANUP_DIRS+=("$temp_dir")
 	temp_pkg_dir="$temp_dir/$pkg_name"
-	mkdir -p "$temp_pkg_dir/lib/upgrade/keep.d/"
 
 	if [ "$PKG_MGR" == "apk" ]; then
 		mkdir -p "$temp_pkg_dir/lib/apk/packages/"
@@ -324,11 +334,16 @@ build_one() {
 		cp -fp "$pkg_dir/files/daed.config" "$temp_pkg_dir/etc/config/daed"
 		chmod 0644 "$temp_pkg_dir/etc/config/daed"
 		mkdir -p "$temp_pkg_dir/etc/daed"  # 目录占位；wing.db / geo 数据运行时建
+		# WAN up/update 时重启 daed。原先在 luci-app-daed 包里（职责错位）。
+		mkdir -p "$temp_pkg_dir/etc/hotplug.d/iface"
+		cp -fp "$pkg_dir/files/98-daed" "$temp_pkg_dir/etc/hotplug.d/iface/98-daed"
+		chmod 0755 "$temp_pkg_dir/etc/hotplug.d/iface/98-daed"
 		rm -rf "$src_dir"
 	fi
 
 	# —— conffiles 写入 lib/upgrade/keep.d/<pkg>（apk 路径才有效，但写了无害）——
 	if [ "${#conffiles[@]}" -gt 0 ]; then
+		mkdir -p "$temp_pkg_dir/lib/upgrade/keep.d"
 		{
 			for f in "${conffiles[@]}"; do
 				# 跳过 /etc/config/<app> 自身的 keep（apk 自带 conffiles 处理）
@@ -366,6 +381,12 @@ build_one() {
 			done < "$temp_pkg_dir/lib/apk/packages/$pkg_name.conffiles"
 		fi
 
+		local extra_postinst=""
+		if [ "$pkg_name" = "daed" ]; then
+			# 升级时二进制被替换，但 procd 实例不会因文件变化而重建，必须显式重启。
+			extra_postinst='/etc/init.d/daed enabled && /etc/init.d/daed restart'
+		fi
+
 		cat > "$temp_dir/post-install" <<-EOF
 			#!/bin/sh
 			[ "\${IPKG_NO_SCRIPT}" = "1" ] && exit 0
@@ -378,7 +399,8 @@ build_one() {
 			[ -n "\${IPKG_INSTROOT}" ] || {
 				rm -f /tmp/luci-indexcache.*
 				rm -rf /tmp/luci-modulecache/
-				killall -HUP rpcd 2>/dev/null
+				/etc/init.d/rpcd reload 2>/dev/null
+				$extra_postinst
 				exit 0
 			}
 		EOF
@@ -396,7 +418,8 @@ build_one() {
 			[ -n "\${IPKG_INSTROOT}" ] || {
 				rm -f /tmp/luci-indexcache.*
 				rm -rf /tmp/luci-modulecache/
-				killall -HUP rpcd 2>/dev/null
+				/etc/init.d/rpcd reload 2>/dev/null
+				$extra_postinst
 				exit 0
 			}
 		EOF
@@ -495,8 +518,7 @@ build_one() {
 		GENERATED_FILES+=("$BASE_DIR/${pkg_name}-${pkg_version}.ipk")
 	fi
 
-	trap - EXIT
-	rm -rf "$temp_dir"
+	# 临时目录统一由顶层 EXIT trap 清理（见文件头 CLEANUP_DIRS）
 
 	# 把最终文件名回显给 caller
 	echo "$BASE_DIR/${pkg_name}-${pkg_version}.$PKG_MGR"
@@ -521,6 +543,15 @@ build_i18n() {
 		echo "note: $po_zh 不存在，跳过 i18n 子包"
 		return 0
 	fi
+	# CI 会自己编译 po2lmo；本地没有 po2lmo 时可用 SKIP_I18N=1 只打主包。
+	if [ "${SKIP_I18N:-0}" = "1" ]; then
+		echo "note: SKIP_I18N=1，跳过 i18n 子包"
+		return 0
+	fi
+	command -v po2lmo >/dev/null 2>&1 || {
+		echo "error: 缺少 po2lmo（CI 会自行编译；本地可设 SKIP_I18N=1）" >&2
+		return 1
+	}
 
 	local mk_version="$(get_mk_value "$main_dir/Makefile" PKG_VERSION)"
 	local mk_release="$(get_mk_value "$main_dir/Makefile" PKG_RELEASE)"
@@ -532,7 +563,7 @@ build_i18n() {
 	fi
 
 	local temp_dir="$(mktemp -d "$BASE_DIR/tmp.XXXXXX")"
-	trap 'rm -rf "$temp_dir"' EXIT
+	CLEANUP_DIRS+=("$temp_dir")
 
 	local lmo_name="${app_id}.${locale}.lmo"
 	po2lmo "$po_zh" "$temp_dir/$lmo_name"
@@ -574,11 +605,14 @@ build_i18n() {
 		GENERATED_FILES+=("$BASE_DIR/${i18n_name}-${pkg_version}.ipk")
 	fi
 
-	trap - EXIT
-	rm -rf "$temp_dir"
+	# 临时目录统一由顶层 EXIT trap 清理（见文件头 CLEANUP_DIRS）
 }
 
 build_i18n
 
 echo "=== Generated files ==="
+if [ "${#GENERATED_FILES[@]}" -eq 0 ]; then
+	echo "error: 没有生成任何包" >&2
+	exit 1
+fi
 ls -la "${GENERATED_FILES[@]}"

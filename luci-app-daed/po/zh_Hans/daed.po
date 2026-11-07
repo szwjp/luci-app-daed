@@ -1,5 +1,7 @@
 msgid ""
-msgstr "Content-Type: text/plain; charset=UTF-8"
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: zh_Hans\n"
 
 msgid "DAED"
 msgstr "DAED"
@@ -43,32 +45,26 @@ msgstr "日志文件大小(MB)"
 msgid "Set the DAED listen address"
 msgstr "设置监听地址"
 
-msgid "Dashboard Access Port"
-msgstr "仪表板访问端口"
+msgid "Hijack /tmp/resolv.conf"
+msgstr "接管 /tmp/resolv.conf"
 
-msgid "Leave empty to use listen port"
-msgstr "留空则使用监听端口"
+msgid "Replace the system resolver with the WAN DNS servers while daed is running. Usually unnecessary."
+msgstr "在 daed 运行期间用 WAN 上游 DNS 替换系统解析器。通常不需要。"
 
-msgid "For reverse proxy scenarios, leave empty to use the port from listen address"
-msgstr "用于反向代理场景,留空则使用监听地址的端口"
+msgid "Open daed panel in new tab"
+msgstr "在新标签打开 daed 面板"
+
+msgid "This LuCI page is served over HTTPS, but the daed panel only provides HTTP (daed has no TLS support)."
+msgstr "当前 LuCI 页面使用 HTTPS，而 daed 面板只提供 HTTP（daed 不支持 TLS）。"
+
+msgid "Browsers block embedded HTTP content as mixed content, so the area below cannot load."
+msgstr "浏览器会把内嵌的 HTTP 内容当作混合内容拦截，因此下方嵌入区域无法加载。"
+
+msgid "Please open the daed panel with the button above."
+msgstr "请使用上方按钮打开 daed 面板。"
 
 msgid "DAED is not running"
 msgstr "DAED 未运行"
 
 msgid "Please start the DAED service first and try again"
 msgstr "请先启动 DAED 服务后重试"
-
-msgid "Enable Auto Subscribe Update"
-msgstr "启用订阅自动更新"
-
-msgid "Update Cycle"
-msgstr "更新周期"
-
-msgid "Update Time (Every Day)"
-msgstr "更新时间(每天)"
-
-msgid "Username"
-msgstr "用户名"
-
-msgid "Password"
-msgstr "密码"

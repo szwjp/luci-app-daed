@@ -15,7 +15,8 @@
 #   python3 tests/i18n_coverage.py                  # 默认 fail-below=100
 #   python3 tests/i18n_coverage.py --warn-below 80  # publish 阶段只警告不 fail
 #
-# 注意：view 模板（.htm）里的 <%:...%> 不在本检查范围内（工具只覆盖 lua 源码）。
+# 覆盖范围：luasrc 下的 .lua（translate()/_()）与 .htm 模板（<%:...%>）都扫。
+# 旧实现只看 .lua，.htm 里的字符串从未被校验（审查 R09），会给出"假 100%"。
 
 import argparse
 import glob
@@ -31,6 +32,9 @@ DEFAULT_PO = os.path.join(REPO_ROOT, "luci-app-daed", "po", "zh_Hans", "daed.po"
 # 只认双引号字符串（本仓 lua 源码统一用双引号），允许 \\" 转义。
 _MSGID_RE = re.compile(r'(?<![A-Za-z0-9_])(?:translate|_)\s*\(\s*"((?:[^"\\]|\\.)*)"')
 
+# LuCI 模板里的翻译标记：<%:Some text%>。允许跨行（DOTALL）。
+_HTM_MSGID_RE = re.compile(r'<%:\s*(.*?)\s*%>', re.S)
+
 
 def _unescape_lua(s):
     return s.replace('\\"', '"').replace("\\\\", "\\")
@@ -38,13 +42,20 @@ def _unescape_lua(s):
 
 def scan_source(src_dir):
     """返回 {msgid: [出现该 msgid 的文件, ...]}。"""
-    files = sorted(glob.glob(os.path.join(src_dir, "**", "*.lua"), recursive=True))
+    files = sorted(
+        glob.glob(os.path.join(src_dir, "**", "*.lua"), recursive=True) +
+        glob.glob(os.path.join(src_dir, "**", "*.htm"), recursive=True)
+    )
     found = {}
     for path in files:
         with open(path, encoding="utf-8") as f:
             text = f.read()
-        for m in _MSGID_RE.finditer(text):
-            msgid = _unescape_lua(m.group(1))
+        if path.endswith(".htm"):
+            matches = [(m.group(1), False) for m in _HTM_MSGID_RE.finditer(text)]
+        else:
+            matches = [(m.group(1), True) for m in _MSGID_RE.finditer(text)]
+        for msgid, need_unescape in matches:
+            msgid = _unescape_lua(msgid) if need_unescape else " ".join(msgid.split())
             found.setdefault(msgid, []).append(os.path.relpath(path, REPO_ROOT))
     return found
 
@@ -139,7 +150,7 @@ def main():
     translated = total - len(missing)
     pct = translated * 100.0 / total
 
-    print(f"源码 msgid: {total} 条（{_short(args.src_dir)}/**/*.lua）")
+    print(f"源码 msgid: {total} 条（{_short(args.src_dir)}/**/*.{{lua,htm}}）")
     print(f"po 条目:    {len(po)} 条（{_short(args.po)}）")
     print(f"i18n 覆盖率: {translated}/{total} = {pct:.1f}%")
     if missing:

@@ -68,6 +68,9 @@ endef
 define Package/daed
   $(call Package/daed/Default)
   TITLE:=A Modern Dashboard For dae (szwjp/daed build)
+  # 二进制固定是 x86_64（PKG_SOURCE 只有这一个 asset）。不加架构门禁的话，
+  # 在 aarch64 等目标上会打出一个 arch 标签是目标架构、内容却是 x86_64 ELF 的包。
+  PKGARCH:=x86_64
   # 依赖对齐 ImmortalWrt 官方 daed 包（设备上 `apk info -a daed` 实测）：
   #   ca-bundle / kmod-sched-core / kmod-sched-bpf / kmod-veth / libc
   #   + kmod-xdp-sockets-diag —— 官方包有这项，本包最初漏了；实测在设备上装
@@ -77,6 +80,7 @@ define Package/daed
   DEPENDS:=+ca-bundle +kmod-sched-core +kmod-sched-bpf \
            +kmod-veth +kmod-xdp-sockets-diag \
            +v2ray-geoip +v2ray-geosite \
+           @TARGET_x86 \
            +@KERNEL_XDP_SOCKETS \
            +DAED_USE_VMLINUX_BTF:vmlinux-btf
 endef
@@ -152,6 +156,20 @@ define Package/daed/install
 	# 4. /etc/daed 目录占位（无文件）。让 daed 首次启动有处可创建
 	#    wing.db、geo-update.env；geo 数据由用户的 update 任务负责。
 	$(INSTALL_DIR) $(1)/etc/daed
+
+	# 5. WAN up/update 时重启 daed（原先放在 luci-app-daed 里，属职责错位：
+	#    卸载"只是界面"的包不该连带改变守护进程行为）。
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_BIN) ./files/98-daed $(1)/etc/hotplug.d/iface/98-daed
+endef
+
+# 升级时必须显式重启：apk 只替换磁盘上的文件，运行中的进程仍持有旧 inode，
+# 而 procd 在实例参数未变化时不会重建实例。没有这一段就要用户手工 restart。
+define Package/daed/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/daed enabled && /etc/init.d/daed restart
+exit 0
 endef
 
 $(eval $(call BuildPackage,daed))

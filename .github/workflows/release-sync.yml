@@ -81,8 +81,18 @@ jobs:
         if: steps.sync.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          git push origin HEAD:main
-          echo "已推送到 main"
+          # 人工提交可能与本轮 sync 并发落在 main 上；直接 push 会 non-fast-forward
+          # 失败并开 issue。这里 rebase 后重试，最多 3 次。
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "已推送到 main"
+              exit 0
+            fi
+            echo "push 失败（第 $attempt 次），rebase 后重试"
+            git pull --rebase --autostash origin main || true
+          done
+          echo "::error::push 连续 3 次失败"
+          exit 1
 
       # 熔断：build 连续失败时不再每 2 小时重试，避免无限烧构建/刷 issue。
       # 恢复方式：修复后手动 dispatch build.yml 或 push 一次，成功即复位。

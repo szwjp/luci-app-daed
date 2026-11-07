@@ -1,4 +1,6 @@
 #!/bin/sh
+# WAN 重新拨号/地址变更后重启 daed。
+# 归属 daed 包（守护进程行为），不再由 luci-app-daed 提供。
 
 [ "$ACTION" = "ifup" ] || [ "$ACTION" = "ifupdate" ] || exit 0
 [ "$ACTION" = "ifupdate" ] && [ -z "$IFUPDATE_ADDRESSES" ] && [ -z "$IFUPDATE_DATA" ] && exit 0

@@ -121,17 +121,27 @@ apk add --allow-untrusted /tmp/新下载的包.apk
 
 ```
 luci-app-daed/
-├── luci-app-daed/           LuCI 应用包（lua/po/root/Makefile）
-├── daed/                    daed 二进制包（Makefile + files/）
-├── scripts/release-sync.sh  同步工具（CI 每 2 小时跑，也可手动跑）
-├── tests/i18n_coverage.py   i18n 门禁（luasrc 源码 vs zh_Hans po）
+├── luci-app-daed/            LuCI 应用包（lua/po/root/Makefile）
+│   ├── luasrc/               controller + CBI 模型 + view 模板
+│   ├── po/zh_Hans/           中文翻译
+│   └── root/usr/share/rpcd/  仅 ACL（没有 init / hotplug）
+├── daed/                     daed 二进制包（Makefile + files/）
+│   └── files/                daed.init / daed.config / 98-daed(hotplug)
+├── scripts/release-sync.sh   同步工具（CI 每 2 小时跑，也可手动跑）
+├── tests/i18n_coverage.py    i18n 门禁（.lua + .htm vs zh_Hans po）
 └── .github/
-    ├── build-pkg.sh         组 apk/ipk 的打包脚本
-    └── workflows/           arch-test / build / release-sync
+    ├── build-pkg.sh          组 apk/ipk 的打包脚本
+    └── workflows/            arch-test / build / release-sync
 ```
 
 `luci-app-daed/luasrc/` 与 `luci-app-daed/po/` 直接复用 QiuSimons 仓 `kix` 分支的对应目录。
-`daed/files/` 里的 `daed.init` 是 procd init，`daed.config` 是 UCI 默认段。
+
+**包职责边界**（2026-11 审查后调整）：
+
+- `luci-app-daed` 只装只读的 LuCI 产物：controller / CBI / view / ACL。
+- `daed` 负责一切守护进程行为：procd init（含 `DAE_LOCATION_ASSET` 与可选的
+  resolv.conf 接管）、UCI 默认段、WAN 重连时的 hotplug 重启。
+- 这样卸载"界面包"不会连带改变 daemon 行为，反之只装 `daed` 也有完整运行逻辑。
 
 ## 与 QiuSimons 版的取舍
 
@@ -152,32 +162,42 @@ luci-app-daed/
 
 ## 验证清单
 
-代码/产物层面（已核实）：
+静态与产物层面（2026-11-07 复核）：
 
-- [x] 仓库结构完整（2 个 OpenWrt 包 + LuCI lua/po/root + 3 个 workflow + 构建脚本）
-- [x] LuCI lua 源（controller/cbi/view/po）与 QiuSimons `kix` 分支一致
-- [x] `daed/Makefile` 路径 A 形态：`Build/Prepare` 解包 + `Build/Compile` no-op
-- [x] szwjp/daed 的 `release` job 跑通并产出 release（最后一条是旧格式
-      `v2.1.1-nightly-20261016`；新格式 `v<上游版本>-nightly-YYYYMMDD-<fork sha7>-<dae sha7>`
-      由 daed 侧改造后启用）
-- [x] 本仓 `build.yml` 端到端跑通：一次产出 6 个资产
-      （daed apk+ipk、luci-app-daed apk+ipk、i18n apk+ipk）
-- [x] 下载真实 ipk 校验内容：LuCI 文件落在 `/usr/lib/lua/luci/...`、
-      daed 二进制 59,613,346 bytes（ELF x86-64）
-- [x] i18n 门禁改为「luasrc 源码 vs po」实比对（`--fail-below 100` 可红可绿），
-      不再依赖不存在的 `po/daed.pot`；`bash -n build-pkg.sh` 也已真生效
-- [x] conffiles 回填逻辑已修正：只有包内确实带 `/etc/config/<app>` 时才声明该 conffile
+- [x] 仓库结构：2 个 OpenWrt 包 + LuCI lua/po/root + 3 个 workflow + 构建脚本
+- [x] `daed/Makefile` 路径 A：`Build/Prepare` 解包 + `Build/Compile` no-op
+- [x] `build-pkg.sh` 本地打 apk 成功（`apk-tools 3.0.7 mkpkg`，ADBd 容器，`adbdump` 可解析）
+- [x] `luci-app-daed` 产物不再包含 `/etc/config/daed`、`/etc/init.d`、`/etc/hotplug.d`；
+      也不再生成空的 `lib/upgrade/keep.d`
+- [x] `daed` 产物包含 `usr/bin/daed`、`etc/init.d/daed`、`etc/config/daed`、
+      `etc/hotplug.d/iface/98-daed` 与 conffiles/conffiles_static
+- [x] i18n 门禁覆盖 `.lua` 与 `.htm`：22/22 = 100%，无未使用条目
+- [x] `bash -n`（build-pkg.sh / release-sync.sh / daed.init / 98-daed）、
+      YAML 解析、`py_compile` 全部通过
+- [x] Lua 语法（luaparser）：controller + 两个 CBI 模型全部通过
 
-待验证（未做或本轮未复核）：
+实机验证（192.168.1.139，ImmortalWrt 25.12.2 x86_64 / apk-tools 3.0.5）：
 
-- [ ] `luci-app-daed` 的下次构建产物里不再出现 `/etc/config/daed` conffile（产物未重建）
-- [ ] 本仓 `arch-test` 在 CI 上全绿：当前 `daed/Makefile` 还是旧格式 tag，要等 daed
-      侧发一条新格式 release 并同步一次后才可能绿
-- [ ] 自动链路实跑一整轮：daed 发新 release → release-sync 同步 → 自动 dispatch build
-      → 发本仓 release（代码已就位，尚未在远端跑过完整周期）
-- [ ] 设备（ImmortalWrt 25.12.2 / apk-tools 3.0.5）上 `apk add --simulate` 预演（本轮未复核）
-- [ ] 设备上真正 `apk add` 安装
-- [ ] 安装后确认 LuCI 菜单与 Header 的「内核 vX」显示
+- [x] 全新安装两个包成功，daed 正常启动（`ubus call service list` 可见
+      `env.DAE_LOCATION_ASSET=/usr/share/v2ray`，无 sed 改写 init）
+- [x] `/etc/init.d/daed` 的 sha256 与 `conffiles_static` 一致；升级后不产生
+      `init.d/daed.apk-new`（仅用户改过的 `/etc/config/daed` 产生 `.apk-new`，符合预期）
+- [x] 升级 daed 包（r1 → r2）后 pid 变化：postinst 自动重启生效，无需手工 restart；
+      日志保留（不再被 stop 删除）
+- [x] `hijack_resolv=1` 时 bind mount 生效、`=0` 与 stop 时正确卸载并清理临时文件；
+      不再使用硬编码 DNS 兜底
+- [x] LuCI 页面 200；`get_log` 返回 `text/plain; charset=utf-8` + nosniff
+- [x] `clear_log`：GET → 405；POST 无 token → 403；错误 token → 403；
+      正确 token → 200 且日志清零
+- [x] 卸载 `luci-app-daed` 后 `daed`、`/etc/init.d/daed`、hotplug、进程均保留
+- [x] 卸载 `daed` 后零残留（文件 / rc.d / `/lib/apk/packages` / keep.d / 进程 / ubus）
+
+未覆盖：
+
+- [ ] `po2lmo` 产物：本机无 Lua，未本地构建 i18n 子包；由 CI 构建（po 已通过解析校验）
+- [ ] 从旧版本（含 `/etc/init.d/luci_daed`）升级的迁移路径未实机复现
+- [ ] 自动链路整轮（daed 新 release → release-sync → dispatch build → 发 release）
+- [ ] 真实 CI 上的 arch-test / build 全绿
 
 ### 版本策略：两个包都用 daed release 的日期
 
@@ -207,7 +227,8 @@ apk version -t 2026.10.16-r1 1.27.0-r1             →  >   正常升级
 | 路径 | 实际归属 | 包管理器升级时会动吗 |
 |---|---|---|
 | `/usr/bin/daed` | 59.6MB 二进制 | 会（换新版） |
-| `/etc/init.d/daed` | procd init | 是 conffile，改过则保留 |
+| `/etc/init.d/daed` | procd init（含 env、可选 resolv 接管） | 是 conffile，改过则保留 |
+| `/etc/hotplug.d/iface/98-daed` | WAN up/update 时重启 daed | 会（随 daed 包更新） |
 | `/etc/config/daed` | UCI 段 | 是 conffile，改过则保留 |
 | `/etc/daed/wing.db` | 业务数据 | 不碰 |
 | `/etc/daed/geo-update.env` | jwt secret | 不碰 |
@@ -220,6 +241,18 @@ apk version -t 2026.10.16-r1 1.27.0-r1             →  >   正常升级
 geo 数据由独立的 `daed-geoip`、`daed-geosite` 两个包提供。
 本仓的 daed 包依赖已与官方对齐（含 `kmod-xdp-sockets-diag`）。
 
+## 从旧版本升级（2026-11 行为变更）
+
+- `/etc/init.d/luci_daed` 已删除：DNS 接管与 hotplug 重启并入 `daed` 包。
+  升级后 apk 会移除该脚本；若 `/etc/rc.d/S98luci_daed` 残留，可手工 `rm`（只是悬空链接）。
+- **升级后 daed 会自动重启**（`Package/daed/postinst`），不需要再手工
+  `/etc/init.d/daed restart`。
+- 以前 `luci_daed` 会 `sed` 改写 `/etc/init.d/daed` 来注入 `DAE_LOCATION_ASSET`，
+  这会污染 conffile 的出厂 hash。现在环境变量直接写在 init 里；曾经被改过的设备
+  需要 `rm -f /etc/init.d/daed.apk-new` 或者 `apk fix daed` 恢复跟踪。
+- `/tmp/resolv.conf` 接管改为可选（`uci set daed.config.hijack_resolv=1`），默认关闭。
+  旧版本无条件接管，升级后如发现 daed 解析异常，请检查该选项。
+
 ## License
 
-AGPL-3.0-only（daed 部分）+ MIT（LuCI 部分）。
+AGPL-3.0-only（daed 二进制部分）+ MIT（LuCI 部分，见 `LICENSE`）。

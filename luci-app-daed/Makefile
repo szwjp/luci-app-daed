@@ -30,10 +30,13 @@ LUCI_TITLE:=LuCI for daed (szwjp/daed build)
 LUCI_DEPENDS:=+daed +zoneinfo-asia +luci-compat
 LUCI_PKGARCH:=all
 
-# LuCI 控制器 / CBI 模板 / view 是只读产物，不放 conffiles。
-# 用户运行时改的 UCI（daed.config.*）由 daed 包的 conffiles 负责。
-define Package/$(PKG_NAME)/conffiles
-endef
+PKG_LICENSE:=MIT
+PKG_MAINTAINER:=szwjp <szwjp@users.noreply.github.com>
+
+# 本包只装只读产物：controller / CBI 模型 / view 模板 / ACL。
+# 没有任何 conffile（/etc/config/daed 由 daed 包声明），所以不写
+# Package/<name>/conffiles；写一个空的 define 反而会让 build-pkg.sh
+# 的字面解析器误判（它按 `define Package/<pkg>/conffiles` 精确匹配）。
 
 include $(TOPDIR)/feeds/luci/luci.mk
 # call BuildPackage - OpenWrt buildroot signature

@@ -1,24 +1,31 @@
 <script type="text/javascript">
 	//<![CDATA[
+	var daed_log_url   = '<%=url([[admin]], [[services]], [[daed]], [[get_log]])%>';
+	var daed_clear_url = '<%=url([[admin]], [[services]], [[daed]], [[clear_log]])%>';
+	var daed_log_token = '<%=token%>';
+
 	function clear_log(btn) {
-		XHR.get('<%=url([[admin]], [[services]], [[daed]], [[clear_log]])%>', null,
-			function(x, data) {
-				if(x && x.status == 200) {
-					var log_textarea = document.getElementById('log_textarea');
-					log_textarea.innerHTML = "";
-					log_textarea.scrollTop = log_textarea.scrollHeight;
-				}
-				location.reload();
+		XHR.post(daed_clear_url, { token: daed_log_token }, function(x) {
+			var log_textarea = document.getElementById('log_textarea');
+			if (x && x.status == 200 && log_textarea) {
+				log_textarea.value = "";
 			}
-		);
+			location.reload();
+		});
 	}
+
 	var scrolled = false;
-	XHR.poll(2, '<%=url([[admin]], [[services]], [[daed]], [[get_log]])%>', null,
+	XHR.poll(5, daed_log_url, null,
 		function(x, data) {
-			if(x && x.status == 200) {
+			if (x && x.status == 200) {
 				var log_textarea = document.getElementById('log_textarea');
-				log_textarea.innerHTML = x.responseText;
-				if (!scrolled) {
+				if (!log_textarea)
+					return;
+				// 用 value 而不是 innerHTML：日志是纯文本，不能让其中内容被解析成 HTML。
+				var at_bottom = log_textarea.scrollTop + log_textarea.clientHeight
+					>= log_textarea.scrollHeight - 4;
+				log_textarea.value = x.responseText;
+				if (!scrolled || at_bottom) {
 					log_textarea.scrollTop = log_textarea.scrollHeight;
 					scrolled = true;
 				}

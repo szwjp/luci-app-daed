@@ -1,6 +1,8 @@
 name: Arch test
 
-# 静态门禁：不依赖 OpenWrt SDK、不依赖外网，3 分钟内跑完。
+# 静态门禁：不依赖 OpenWrt SDK，3 分钟内跑完。
+# 注意：仍需访问 GitHub API 与 release 资产（gh api / curl -I），
+# 因此不是"离线可跑"的检查；网络抖动会表现为本 job 红。
 # 在 PR / push-to-main / workflow_dispatch / workflow_call 触发；
 # build.yml 用 workflow_call 让 release 走同一份门禁，避免两套实现漂移。
 #

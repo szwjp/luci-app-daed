@@ -1,6 +1,6 @@
 {
 	"luci-app-daed": {
-		"description": "Grant UCI access for luci-app-daed",
+		"description": "Grant UCI access for luci-app-daed (Lua CBI; the legacy Lua dispatcher does not enforce method-level ubus ACLs)",
 		"read": {
 			"uci": [ "daed" ]
 		},
