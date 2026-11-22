@@ -18,16 +18,17 @@
 
 ### 方式 1：直接用 Release 里的包（推荐，无需编译）
 
-每次构建都会发布 6 个资产（两种包格式 × 两个包 + 中文语言包）。以当前 release 为例
-（tag `v2026.10.16-r01`）：
+每次构建都会发布 6 个资产（两种包格式 × 两个包 + 中文语言包）。下面按本文写作时的
+最新 release 举例（`v2026.11.01-r06`；实际请以 Releases 页的最新 tag 为准）：
 
 | 资产 | 用途 |
 |---|---|
-| `daed-2026.10.16-r1.apk` / `.ipk` | daed 二进制（含 procd init、UCI 模板） |
-| `luci-app-daed-2026.10.16-r1.apk` / `.ipk` | LuCI 面板（Lua CBI：设置/仪表板/日志） |
-| `luci-i18n-daed-zh-cn-2026.10.16-r1.apk` / `.ipk` | 中文翻译 |
+| `daed-2026.11.01-r5.apk` / `.ipk` | daed 二进制（含 procd init、UCI 模板） |
+| `luci-app-daed-2026.11.01-r6.apk` / `.ipk` | LuCI 面板（Lua CBI：设置/仪表板/日志） |
+| `luci-i18n-daed-zh-cn-2026.11.01-r6.apk` / `.ipk` | 中文翻译 |
 
 > 版本命名：release tag 用 luci 包的版本 `v<PKG_VERSION>-r<两位 PKG_RELEASE>`（`r1` → `r01`）；
+> 同名 tag 的 release 会被删除后重建（`build.yml` 的发布步骤），本仓资产不做不可变承诺。
 > 资产文件名里的 `-rN` 是**各自包**的 `PKG_RELEASE`。daed 包的 `PKG_RELEASE` 是「同一天第几个
 > daed release」，同一天上游发多次时可能比 tag 里的 rNN 大（例如 tag `v2026.10.17-r02` 下
 > 的资产可能是 `daed-2026.10.17-r2.apk`）。
@@ -43,8 +44,8 @@ cat /etc/os-release | head -3
 apk 设备（如本项目的 ImmortalWrt 25.12.2 / apk-tools 3.0.5）：
 
 ```bash
-TAG=v2026.10.16-r01   # 换成最新 tag（形如 v<日期>-rNN，NN 两位等宽）
-for f in daed-2026.10.16-r1.apk luci-app-daed-2026.10.16-r1.apk luci-i18n-daed-zh-cn-2026.10.16-r1.apk; do
+TAG=v2026.11.01-r06   # 换成最新 tag（形如 v<日期>-rNN，NN 两位等宽）
+for f in daed-2026.11.01-r5.apk luci-app-daed-2026.11.01-r6.apk luci-i18n-daed-zh-cn-2026.11.01-r6.apk; do
   curl -fsSLO "https://github.com/szwjp/luci-app-daed/releases/download/$TAG/$f"
 done
 scp *.apk root@192.168.1.1:/tmp/
@@ -149,7 +150,7 @@ luci-app-daed/
 |---|---|---|
 | daed 编译 | OpenWrt SDK 全量编译（daed + dae-wing + dae） | 不编译，从 szwjp/daed release 拉预编译二进制 |
 | 多 SDK/多架构 | 是（aarch64/x86_64/i386/mips/mipsle） | 否，目前只 x86_64 |
-| patchset (5 个 DNS/eBPF 补丁 + vmlinux-btf) | 必装 | 不需要；BTF 走运行时选项（init 阶段选择） |
+| patchset (5 个 DNS/eBPF 补丁 + vmlinux-btf) | 必装 | 不需要；BTF 由 daed 运行时自行探测（init 不参与） |
 | 升级 daed 上游 | autoupdate.yml 每 2 小时改 PKG_SOURCE_VERSION | szwjp/daed 自动 bump dae-core pin + wing + daed，发布新 release；本仓每 2 小时探测 |
 | 安装时间 | 2-4 小时交叉编译 | 几分钟打包 ipk |
 | 内核保鲜 | 2h 内 | ≤2h（同步轮询周期） |
@@ -179,7 +180,7 @@ luci-app-daed/
 实机验证（192.168.1.139，ImmortalWrt 25.12.2 x86_64 / apk-tools 3.0.5）：
 
 - [x] 全新安装两个包成功，daed 正常启动（`ubus call service list` 可见
-      `env.DAE_LOCATION_ASSET=/usr/share/v2ray`，无 sed 改写 init）
+      `env.DAE_LOCATION_ASSET=/etc/daed/geo`，无 sed 改写 init）
 - [x] `/etc/init.d/daed` 的 sha256 与 `conffiles_static` 一致；升级后不产生
       `init.d/daed.apk-new`（仅用户改过的 `/etc/config/daed` 产生 `.apk-new`，符合预期）
 - [x] 升级 daed 包（r1 → r2）后 pid 变化：postinst 自动重启生效，无需手工 restart；
@@ -206,11 +207,11 @@ luci-app-daed/
 
 ```
 apk version -t 2.1.1-r1      26.236.50544~cb5d434  →  <   会被判降级 + feed 覆盖
-apk version -t 2026.10.16-r1 26.236.50544~cb5d434  →  >   正常升级
-apk version -t 2026.10.16-r1 1.27.0-r1             →  >   正常升级
+apk version -t 2026.11.01-r1 26.236.50544~cb5d434  →  >   正常升级
+apk version -t 2026.11.01-r1 1.27.0-r1             →  >   正常升级
 ```
 
-所以本仓两个包的 `PKG_VERSION` 都用 **daed release 的日期**（`2026.10.16`）：
+所以本仓两个包的 `PKG_VERSION` 都用 **daed release 的日期**（当前 `2026.11.01`）：
 
 - 首段 ≥ 26，稳压官方 luci-app-daed，`apk upgrade` 不会把我们的包换回去
 - 与 daed 二进制包的版本一致，一眼能对上「这个包对应哪天的二进制」
@@ -273,13 +274,16 @@ WAN 超时未就绪时仍会启动（避免线路故障时 daed 永远起不来�
 | `/etc/daed/geo-backup/` | 上一版文件，回滚用 |
 
 ```sh
-uci set daed.config.geo_update=1                 # 默认开
+uci set daed.config.geo_update=1                 # 默认关（=0），需要时显式开启
 uci set daed.config.geo_update_cron='0 3 * * 1'  # 默认每周一 03:00
 uci commit daed && /etc/init.d/daed-geo-update restart
 
 /usr/bin/daed-geo-update      # 立即跑一次
 tail -f /var/log/daed-geo-update.log
 ```
+
+geo 文件放在本包自有的 `/etc/daed/geo`（首次启动从 `v2ray-geoip` / `v2ray-geosite`
+安装的 `/usr/share/v2ray` 播种一次），不再改写那两个包的文件。
 
 数据源是 Loyalsoldier/v2ray-rules-dat 的 `@release` 分支；上游发布的 `.sha256sum`
 是校验依据，失败重试 3 轮，最后还有大小区间与 protobuf 首字节兜底。若新数据让
@@ -297,6 +301,10 @@ daed 在 UCI 里被禁用时只换文件、不重启也不回滚。
   需要 `rm -f /etc/init.d/daed.apk-new` 或者 `apk fix daed` 恢复跟踪。
 - `/tmp/resolv.conf` 接管改为可选（`uci set daed.config.hijack_resolv=1`），默认关闭。
   旧版本无条件接管，升级后如发现 daed 解析异常，请检查该选项。
+- geo 数据迁到 `/etc/daed/geo`（首次启动自动从 `/usr/share/v2ray` 播种），daed 的
+  `DAE_LOCATION_ASSET` 随之改变：以后升级 `v2ray-geoip` / `v2ray-geosite` 不会再
+  覆盖 daed 正在用的 geo 文件。
+- `geo_update` 改为**默认关闭**：升级不会自动启用每周下载与重启，需要时在 LuCI 里勾选。
 
 ## License
 

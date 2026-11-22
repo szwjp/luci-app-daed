@@ -6,7 +6,17 @@
 [ "$ACTION" = "ifupdate" ] && [ -z "$IFUPDATE_ADDRESSES" ] && [ -z "$IFUPDATE_DATA" ] && exit 0
 
 UPTIME=$(cut -d. -f1 /proc/uptime 2>/dev/null)
-[ -n "$UPTIME" ] && [ "$UPTIME" -lt 30 ] && exit 0
+
+# boot() 会先等 WAN up（最多 wan_timeout 秒）。这段时间内若 hotplug 再安排一次重启，
+# 会和 boot 的首次启动打架（WAN 在 30~60s 才起来时多断一次流）。因此跳过窗口
+# 与 delay_start/wan_timeout 对齐（审查 N06）。
+SKIP=30
+if [ "$(uci -q get daed.config.delay_start)" = "1" ]; then
+	WAN_TIMEOUT=$(uci -q get daed.config.wan_timeout)
+	case "$WAN_TIMEOUT" in ''|*[!0-9]*) WAN_TIMEOUT=60 ;; esac
+	SKIP=$((WAN_TIMEOUT + 15))
+fi
+[ -n "$UPTIME" ] && [ "$UPTIME" -lt "$SKIP" ] && exit 0
 
 . /lib/functions/network.sh
 network_find_wan6 NET_IF6

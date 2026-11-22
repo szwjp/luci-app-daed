@@ -8,6 +8,9 @@ CONF="daed"
 PROG="/usr/bin/daed"
 LOG="/var/log/daed/daed.log"
 RESOLV_DAED="/tmp/resolv.conf.daed"
+# geo 数据目录（本包自有）。不再直接改写 v2ray-geoip / v2ray-geosite 拥有的
+# /usr/share/v2ray/*.dat：那两个包升级时会把文件覆盖回去，且两个 owner 争同一路径。
+GEO_DIR="/etc/daed/geo"
 
 # /tmp/resolv.conf 默认已由 netifd 写入 WAN 上游 DNS，劫持属于可选的兜底手段，
 # 因此由 UCI 选项 hijack_resolv（默认关）控制，避免无条件遮蔽 netifd/dnsmasq 的更新。
@@ -55,6 +58,18 @@ restore_resolv_conf() {
 	rm -f "$RESOLV_DAED"
 }
 
+# 首次启动时从 v2ray 官方包的文件播种；之后 geo 数据完全由 daed-geo-update 维护，
+# 不再写 v2ray-* 包的文件。
+seed_geo() {
+	local f
+	[ -d "$GEO_DIR" ] || mkdir -p "$GEO_DIR" 2>/dev/null || return 0
+	for f in geoip.dat geosite.dat; do
+		[ -s "$GEO_DIR/$f" ] && continue
+		[ -s "/usr/share/v2ray/$f" ] || continue
+		cp -f "/usr/share/v2ray/$f" "$GEO_DIR/$f" 2>/dev/null
+	done
+}
+
 # 路由器重启后 pppd 往往还要拨 20 秒左右，而 S99 的 daed 早就起来了。
 # dae 内核一启动就把 eBPF 程序挂到接口上，此时默认路由还不存在，LAN 回程包
 # 会以 "network is unreachable" 失败（luci-app-dae 在真机上踩过同样的坑）。
@@ -90,6 +105,7 @@ boot() {
 
 	config_get_bool delay "config" "delay_start" 1
 	config_get timeout "config" "wan_timeout" 60
+	case "$timeout" in ''|*[!0-9]*) timeout=60 ;; esac
 	if [ "$delay" -eq 1 ] && [ "$timeout" -gt 0 ]; then
 		wait_for_wan "$timeout"
 	fi
@@ -118,9 +134,11 @@ start_service() {
 	procd_append_param command --logfile "$LOG"
 	procd_append_param command --logfile-maxbackups "$log_maxbackups"
 	procd_append_param command --logfile-maxsize "$log_maxsize"
+	seed_geo
 	# daed 需要 v2ray geo 数据目录；以前由 LuCI 包的 init 用 sed 往本文件里注入，
 	# 那会改坏本 conffile 的出厂 hash（升级永远落成 daed.apk-new），此处直接内置。
-	procd_set_param env DAE_LOCATION_ASSET=/usr/share/v2ray
+	# 指向本包自己的目录，避免运行期改写 v2ray-geoip / v2ray-geosite 的包文件（审查 N02）。
+	procd_set_param env DAE_LOCATION_ASSET="$GEO_DIR"
 
 	procd_set_param limits core="unlimited"
 	procd_set_param limits nofile="1000000 1000000"

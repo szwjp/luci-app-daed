@@ -21,7 +21,7 @@
 # 与 QiuSimons/luci-app-daed 的 daed/Makefile 关键差异：
 #   - 没有 Build/Prepare 里的 git clone dae + dae-wing + pnpm build
 #   - PKG_SOURCE_URL 指向 szwjp/daed release，不是 daeuniverse/daed
-#   - 不依赖 vmlinux-btf 与 5 个 DNS/eBPF patchset（BTF 走运行时）
+#   - 不依赖 vmlinux-btf 与 5 个 DNS/eBPF patchset（BTF 由 daed 运行时探测）
 
 include $(TOPDIR)/rules.mk
 
@@ -75,32 +75,20 @@ define Package/daed
   #   ca-bundle / kmod-sched-core / kmod-sched-bpf / kmod-veth / libc
   #   + kmod-xdp-sockets-diag —— 官方包有这项，本包最初漏了；实测在设备上装
   #     本包会把已装的 kmod-xdp-sockets-diag 当孤儿包 Purging 掉。
-  # @KERNEL_XDP_SOCKETS 与 DAED_USE_VMLINUX_BTF:vmlinux-btf 是构建期语法，
-  # 只在 OpenWrt 源码构建时有意义；打 ipk/apk 时由 build-pkg.sh 过滤掉。
+  # @KERNEL_XDP_SOCKETS 是构建期语法，只在 OpenWrt 源码构建时有意义；
+  # 打 ipk/apk 时由 build-pkg.sh 过滤掉。
+  # jsonfilter：init 的 hijack_resolv_conf 用它解析 ubus 的 dns-server；缺了会静默降级。
   DEPENDS:=+ca-bundle +kmod-sched-core +kmod-sched-bpf \
            +kmod-veth +kmod-xdp-sockets-diag \
            +v2ray-geoip +v2ray-geosite \
-           +curl \
+           +curl +jsonfilter \
            @TARGET_x86 \
-           +@KERNEL_XDP_SOCKETS \
-           +DAED_USE_VMLINUX_BTF:vmlinux-btf
+           +@KERNEL_XDP_SOCKETS
 endef
 
-# 运行时选项：BTF 来源。daed 二进制自带 eBPF object（已编好），
-# 运行时由 init 选 DAED_USE_KERNEL_BTF / DAED_USE_VMLINUX_BTF。
-# 这里没有 SDK 编译阶段，BTF 是 daed 启动时自己选，不进 Makefile 的 DEPENDS。
-define Package/daed/config
-	choice
-		prompt "BTF source for CO-RE"
-		default DAED_USE_KERNEL_BTF
-		depends on PACKAGE_daed
-	config DAED_USE_KERNEL_BTF
-		bool "Use kernel BTF (integrated)"
-		depends on KERNEL_DEBUG_INFO_BTF
-	config DAED_USE_VMLINUX_BTF
-		bool "Use vmlinux-btf package"
-	endchoice
-endef
+# 不提供 BTF 三选一：二进制自带的 eBPF object 已编好，BTF 由 daed 运行时自行探测，
+# init 也不会读取任何 DAED_USE_* 符号 —— 保留一个不影响运行期的 menuconfig 只会误导
+# （审查 N10）。确实需要 vmlinux-btf 的用户在设备上自行安装该包即可。
 
 define Package/daed/description
   daed bundled by szwjp/daed (follows dae/dae-wing main + custom UI).

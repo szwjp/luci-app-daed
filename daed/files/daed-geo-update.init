@@ -17,7 +17,7 @@ STOP=11
 #   uci commit daed
 #   /etc/init.d/daed-geo-update restart
 #
-# 用 daed.config.geo_update=0 可以整体关闭更新，此时条目会从 crontab 移除，
+# 默认关闭；用 daed.config.geo_update=1 开启。关闭时条目会从 crontab 移除，
 # 而不是留着空跑。
 
 . /lib/functions.sh
@@ -37,7 +37,7 @@ schedule() {
 update_enabled() {
 	local value
 	config_load "$CONFIG"
-	config_get_bool value config geo_update 1
+	config_get_bool value config geo_update 0
 	echo "$value"
 }
 

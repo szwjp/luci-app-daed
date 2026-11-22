@@ -1,3 +1,5 @@
+local http = require "luci.http"
+
 local m, s ,o
 
 m = Map("daed")
@@ -21,7 +23,7 @@ o.rmempty = false
 
 o = s:option(Value, "log_maxsize", translate("Logfile Max Size (MB)"))
 o.default = 5
-o.datatype = "uinteger"
+o.datatype = "range(1,100)"
 o.rmempty = false
 
 o = s:option(Flag, "delay_start", translate("Wait for WAN before start"),
@@ -47,7 +49,7 @@ o.rmempty = false
 
 o = s:option(Flag, "geo_update", translate("Update geo data periodically"),
 	translate("Refresh geoip.dat / geosite.dat on a schedule. daed only reads them at startup."))
-o.default = 1
+o.default = 0
 o.rmempty = false
 
 o = s:option(Value, "geo_update_cron", translate("Geo update schedule (cron)"))
@@ -57,13 +59,44 @@ o.rmempty = false
 o:depends("geo_update", "1")
 
 m.apply_on_parse = true
-m.on_after_apply = function(self,map)
-	if luci.sys.call("/etc/init.d/daed enabled") == 0 then
-		luci.sys.exec("/etc/init.d/daed restart")
-	else
-		luci.sys.exec("/etc/init.d/daed stop")
+
+-- 只有会影响 daed 启动参数的选项变化时才重启进程：只改 geo 周期/日志保留数量
+-- 也重启会白白中断连接（审查 N05）。
+local restart_keys = {
+	"enabled", "listen_addr", "log_maxbackups", "log_maxsize",
+	"delay_start", "wan_timeout", "hijack_resolv",
+}
+local restart_before = {}
+
+m.on_before_commit = function(self)
+	for _, k in ipairs(restart_keys) do
+		restart_before[k] = tostring(self.uci:get("daed", "config", k) or "")
 	end
-	-- 订阅周期/开关改了要立刻反映到 crontab
+end
+
+m.on_after_apply = function(self)
+	local changed = false
+	for _, k in ipairs(restart_keys) do
+		-- 复选框未勾选时表单里没有该键，回退到已提交的 UCI 值
+		local new = http.formvalue("cbid.daed." .. k)
+		if new == nil then
+			new = self.uci:get("daed", "config", k) or ""
+		end
+		if tostring(new) ~= (restart_before[k] or "") then
+			changed = true
+			break
+		end
+	end
+
+	if changed then
+		if luci.sys.call("/etc/init.d/daed enabled") == 0 then
+			luci.sys.exec("/etc/init.d/daed restart")
+		else
+			luci.sys.exec("/etc/init.d/daed stop")
+		end
+	end
+
+	-- geo 周期/开关改了要立刻反映到 crontab（这个服务重启很便宜）
 	luci.sys.exec("/etc/init.d/daed-geo-update restart")
 end
 
